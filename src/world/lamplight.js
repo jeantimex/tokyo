@@ -4,7 +4,7 @@
 // brighter of the two (lights never pile up into a glare), and every lit surface that faces the sky takes its
 // lamp light from that map — as light on its own colour, so asphalt stays asphalt and paint stays paint.
 import * as THREE from 'three/webgpu';
-import { Fn, uniform, texture, vec2, vec3, vec4, smoothstep, step, positionWorld, normalWorld, diffuseColor, materialColor, vertexColor, uv } from 'three/tsl';
+import { Fn, uniform, texture, vec2, vec3, vec4, smoothstep, step, positionWorld, normalWorldGeometry, diffuseColor, materialColor, vertexColor, uv } from 'three/tsl';
 
 export const LAMP_LAYER = 2; // the layer the lamp quads live on: the picture's camera does not see it
 const SIZE = 2048;
@@ -37,7 +37,7 @@ const lampGlow = Fn(() => {
   const at = positionWorld;
   const lampUv = vec2(at.x.sub(lampRect.x), lampRect.y.sub(at.z)).div(lampRect.z.mul(2)).add(0.5).toVar();
   const edge = smoothstep(vec2(0), vec2(0.04), lampUv).mul(smoothstep(vec2(0.96), vec2(1), lampUv).oneMinus());
-  const up = smoothstep(0.25, 0.7, normalWorld.y);
+  const up = smoothstep(0.25, 0.7, normalWorldGeometry.y);
   const texel = lampMap.sample(lampUv);
   const level = smoothstep(2.5, 5, at.y.sub(texel.a.mul(YSPAN).sub(Y0)).abs()).oneMinus(); // only light lying at this height
   return texel.rgb.mul(edge.x).mul(edge.y).mul(up).mul(level).mul(lampOn);
