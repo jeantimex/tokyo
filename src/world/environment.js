@@ -1,5 +1,6 @@
 // Sky, sun, image-based ambient light and the day/night blend. (No fog: the whole area is loaded and seen clearly.)
 import * as THREE from 'three/webgpu';
+import { createSky } from './sky.js';
 import { shared } from './materials.js';
 
 const SHADOW_SIZE = 4096;
@@ -23,6 +24,17 @@ export class Environment {
     this.time = 0;
     this.sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 40), THREE.MathUtils.degToRad(205));
 
+    // Environment map: a sky of its own (sky.js), which lights the shaded sides and stands in the glass.
+    this.pmrem = new THREE.PMREMGenerator(renderer);
+    this.envScene = new THREE.Scene();
+    this.envSky = createSky();
+    this.envSky.userData.uSunDir.value.copy(this.sunDir);
+    this.envScene.add(this.envSky);
+    this.bakeEnvironment();
+    // (pipelines are compiled in the background: the first bake may come out black, so it is done again once the
+    // sky and the blur passes have theirs)
+    this.rebake = [0.3, 1.5, 4];
+
     this.hemi = new THREE.HemisphereLight(0xfff4e6, 0x8a8172);
     scene.add(this.hemi);
 
@@ -37,6 +49,16 @@ export class Environment {
     scene.add(this.sun, this.sun.target);
 
     this.apply();
+  }
+
+  // Renders the environment map for the sky as dark as it now is (again whenever that has changed a little).
+  bakeEnvironment() {
+    this.baked = this.dark;
+    this.envSky.userData.uNight.value = this.baked;
+    const old = this.envTarget;
+    this.envTarget = this.pmrem.fromScene(this.envScene, 0, 0.1, 10);
+    this.scene.environment = this.envTarget.texture;
+    old?.dispose();
   }
 
   // sun, moon: unit vectors towards them (world space). The light is the sun by day — dimmer and warmer as it
@@ -58,6 +80,7 @@ export class Environment {
     shared.uSunDir.value.copy(sun);
     shared.uSunGlint.value.copy(DAY.sunColor).lerp(SUNSET, this.warmth).multiplyScalar(this.daylight * 3);
     this.apply();
+    if (Math.abs(this.dark - this.baked) > 0.04 || (this.dark !== this.baked && (this.dark === 0 || this.dark === 1))) this.bakeEnvironment();
   }
 
   // The sky follows the camera; the shadow frustum follows the focus, snapped to texels so shadows do not shimmer.
@@ -80,6 +103,7 @@ export class Environment {
 
   update(dt) {
     this.time += dt;
+    if (this.rebake.length && this.time > this.rebake[0]) { this.rebake.shift(); this.bakeEnvironment(); }
   }
 
   apply() {
