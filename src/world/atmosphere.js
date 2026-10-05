@@ -18,7 +18,13 @@ const UNITS = 0.1; // scene radiance -> the radiance the atmosphere works in (a 
 
 // The node version of the library gives a brighter sky and a thicker haze than its WebGL effect, for which the
 // picture was balanced: both are brought back to that.
-const SKY_SCALE = 0.67, HAZE_SCALE = 0.7;
+// The sky's share depends on how high the sun stands: [elevation in degrees, scale], measured against the effect.
+const SKY_SCALE = [[-3, 1.04], [3, 1], [15, 0.88], [36, 0.715], [49, 0.65], [90, 0.6]], HAZE_SCALE = 0.7;
+const skyScale = (elevation) => {
+  const t = SKY_SCALE, e = Math.min(Math.max(elevation, t[0][0]), t[t.length - 1][0]);
+  let i = 1; while (i < t.length - 1 && t[i][0] < e) i++;
+  return t[i - 1][1] + (t[i][1] - t[i - 1][1]) * (e - t[i - 1][0]) / (t[i][0] - t[i - 1][0]);
+};
 
 // The air over the scene's picture: what is left of each surface's light on its way to the eye plus the light
 // scattered into that path, and the sky where there is no surface. (The library's AerialPerspectiveNode, with
@@ -32,7 +38,7 @@ class AirNode extends THREE.TempNode {
     this.depthNode = depthNode;
     this.sunNode = new SunNode();
     this.moonNode = new MoonNode();
-    this.skyScale = uniform(SKY_SCALE);
+    this.skyScale = uniform(skyScale(40));
     this.hazeScale = uniform(HAZE_SCALE);
   }
 
@@ -142,7 +148,9 @@ export class Atmosphere {
     this.context.moonDirectionECEF.value.copy(this.moon);
     // world -> ECEF is a rotation: its transpose brings a direction back
     const toWorld = this.toWorld ??= this.rotation.clone().transpose();
-    return { sun: this.sun.clone().applyMatrix3(toWorld), moon: this.moon.clone().applyMatrix3(toWorld) };
+    const sun = this.sun.clone().applyMatrix3(toWorld);
+    this.air.skyScale.value = skyScale(THREE.MathUtils.radToDeg(Math.asin(sun.y)));
+    return { sun, moon: this.moon.clone().applyMatrix3(toWorld) };
   }
 
   get reflect() { return this.reflectOn.value > 0.5; }

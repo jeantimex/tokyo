@@ -58,6 +58,7 @@ const hue = (h) => clamp(abs(fract(vec3(0, 2 / 3, 1 / 3).add(h)).mul(6).sub(3)).
 // What a material's colour node works out besides the colour (it runs first): read by the other nodes.
 const pRough = property('float', 'pRough'), pMetal = property('float', 'pMetal'), pEmissive = property('vec3', 'pEmissive');
 const pNormal = property('vec3', 'pNormal'); // the shading normal, world space
+const pGlint = property('vec3', 'pGlint'), pSunlit = property('float', 'pSunlit'); // the sun in a pane, and how much sun reaches it
 export const pPane = property('float', 'pPane'); // how much of a mirror this fragment is: window glass
 
 // ---------------------------------------------------------------- facade
@@ -269,7 +270,7 @@ function facadeMaterial(tex) {
     metal.mulAssign(k.oneMinus());
 
     pRough.assign(rough); pMetal.assign(metal); pPane.assign(paneOut);
-    pEmissive.assign(emis.add(glint));
+    pEmissive.assign(emis); pGlint.assign(glint); pSunlit.assign(1);
     pNormal.assign(normalize(gT.mul(nm.x).add(gB.mul(nm.y)).add(gN.mul(nm.z))));
     return diffuse;
   })();
@@ -277,8 +278,10 @@ function facadeMaterial(tex) {
   m.metalnessNode = pMetal;
   m.emissiveNode = pEmissive;
   m.normalNode = transformNormalToView(pNormal);
+  // the sun mirrored in a pane shows only where the sun reaches the pane
+  m.receivedShadowNode = Fn(([shadow]) => { pSunlit.assign(shadow.r); return shadow; });
   // (the panes are marked in alpha for the reflection pass)
-  m.outputNode = vec4(output.rgb, pPane.mul(-0.95).add(1));
+  m.outputNode = vec4(output.rgb.add(pGlint.mul(pSunlit)), pPane.mul(-0.95).add(1));
   return m;
 }
 
