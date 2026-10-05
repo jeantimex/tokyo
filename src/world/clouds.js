@@ -9,12 +9,16 @@ import {
   Fn, If, Loop, Break, Continue, uniform, texture, texture3D, float, int, vec2, vec3, vec4, mix, min, max, clamp, dot, normalize, length, pow, exp,
   sqrt, log2, abs, sign, select, smoothstep, uv, screenCoordinate, getViewPosition,
 } from 'three/tsl';
-import { getAtmosphereContext, getSplitScalarIlluminance, getIndirectLuminanceToPoint } from '@takram/three-atmosphere/webgpu';
+import { getAtmosphereContext, getSplitScalarIlluminance, getSplitIlluminance, getIndirectLuminanceToPoint } from '@takram/three-atmosphere/webgpu';
 
 const ASSETS = 'assets/takram'; // cloud shape and weather textures and blue noise, as shipped with the packages
 const FADE = 500;                // metres beyond the area over which the clouds thin out to nothing
 const SHADOW_REACH = 12000;      // metres around the focus that the shadow map covers
-const RESOLUTION = 0.5;          // the clouds' picture, as a share of the screen
+const MARCH = 0.25;              // the rays marched each frame, as a share of the screen's width: one pixel in sixteen
+const RESOLUTION = 0.5;          // the clouds' picture, into which the frames are gathered
+const BLEND = 0.1;               // how much of the picture a new frame replaces
+// the place within its 4x4 block that each of sixteen frames marches (an ordered dither: well spread in time)
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
 // what the quality presets change (three-clouds: qualityPresets.ts)
 const QUALITY = {
@@ -39,7 +43,7 @@ const tiled = (url) => new THREE.TextureLoader().load(url, (t) => {
 });
 
 const remapClamped = (x, a, b) => clamp(x.sub(a).div(b.sub(a)), 0, 1);
-const _quad = new THREE.QuadMesh(), _size = new THREE.Vector2(), _v = new THREE.Vector3(), _x = new THREE.Vector3(), _y = new THREE.Vector3();
+const _quad = new THREE.QuadMesh(), _size = new THREE.Vector2(), _v2 = new THREE.Vector2(), _v = new THREE.Vector3(), _x = new THREE.Vector3(), _y = new THREE.Vector3();
 let _state;
 
 export class Clouds extends THREE.TempNode {
@@ -91,14 +95,26 @@ export class Clouds extends THREE.TempNode {
     this.cameraWorld = uniform(camera.matrixWorld);
 
     // ---- targets
-    this.target = new THREE.RenderTarget(1, 1, { depthBuffer: false, type: THREE.HalfFloatType });
+    const target = () => new THREE.RenderTarget(1, 1, { depthBuffer: false, type: THREE.HalfFloatType });
+    this.marched = target();                      // this frame's rays
+    this.pictures = [target(), target()];         // the picture, and the one before it
+    this.marchedMap = texture(this.marched.texture); this.before = texture(this.pictures[1].texture);
+    this.jitter = uniform(new THREE.Vector2());   // where in its block this frame's rays go (uv)
+    this.noiseFrame = uniform(0);
+    this.blend = uniform(1);
+    this.marchTexel = uniform(new THREE.Vector2());
+    this.previousViewProjection = uniform(new THREE.Matrix4());
+    this.eyeWorld = uniform(new THREE.Vector3());
     this.shadowTarget = new THREE.RenderTarget(512, 512, { depthBuffer: false, type: THREE.HalfFloatType });
-    this.result = texture(this.target.texture);
+    this.result = texture(this.pictures[0].texture);
     this.shadowMap = texture(this.shadowTarget.texture);
     // the shadow map looks along the sun's rays: its centre, and its two axes divided by its reach (world space)
     this.shadowCentre = uniform(new THREE.Vector3()); this.shadowX = uniform(new THREE.Vector3(1, 0, 0)); this.shadowY = uniform(new THREE.Vector3(0, 0, 1));
     this.sunWorld = uniform(new THREE.Vector3(0, 1, 0));
     this.frame = 0;
+    // Measured against the library's picture: the sun's light, the sky's, the shadow map's depth as the clouds
+    // read it (the library reads a coarser, thicker map for clouds far off), and the ground's light.
+    this.tune = uniform(new THREE.Vector4(1, 0.95, 1.3, 1));
   }
 
   get quality() { return this._quality; }
@@ -135,10 +151,20 @@ export class Clouds extends THREE.TempNode {
   }
 
   updateBefore({ renderer }) {
-    if (!this.enabled || !this.cloudMaterial) return;
+    if (!this.enabled || !this.cloudMaterial) { this.wasOff = true; return; }
     _state = THREE.RendererUtils.resetRendererState(renderer, _state);
     const size = renderer.getDrawingBufferSize(_size), w = Math.max(1, Math.round(size.width * RESOLUTION)), h = Math.max(1, Math.round(size.height * RESOLUTION));
-    if (this.target.width !== w || this.target.height !== h) this.target.setSize(w, h);
+    const mw = Math.max(1, Math.round(size.width * MARCH)), mh = Math.max(1, Math.round(size.height * MARCH));
+    let fresh = false;
+    if (this.marched.width !== mw || this.marched.height !== mh) { this.marched.setSize(mw, mh); fresh = true; }
+    for (const p of this.pictures) if (p.width !== w || p.height !== h) { p.setSize(w, h); fresh = true; }
+    const cell = BAYER[this.frame % 16];
+    this.jitter.value.set(((cell % 4) + 0.5) / 4 - 0.5, (Math.floor(cell / 4) + 0.5) / 4 - 0.5).divide(_v2.set(mw, mh));
+    this.marchTexel.value.set(1 / mw, 1 / mh);
+    this.noiseFrame.value = this.frame % 64;
+    this.blend.value = fresh || this.wasOff ? 1 : BLEND;
+    this.wasOff = false;
+    this.eyeWorld.value.setFromMatrixPosition(this.camera.matrixWorld);
     if (this.shadowTarget.width !== this.shadowSize) this.shadowTarget.setSize(this.shadowSize, this.shadowSize);
     // (the clouds drift slowly: their shadow map is redone every third frame)
     if (this.frame++ % 3 === 0) {
@@ -147,8 +173,15 @@ export class Clouds extends THREE.TempNode {
       _quad.render(renderer);
     }
     _quad.material = this.cloudMaterial;
-    renderer.setRenderTarget(this.target);
+    renderer.setRenderTarget(this.marched);
     _quad.render(renderer);
+    // gathered into the picture, which is the one before it brought to where the camera now looks
+    this.pictures.reverse();
+    this.before.value = this.pictures[1].texture; this.result.value = this.pictures[0].texture;
+    _quad.material = this.gatherMaterial;
+    renderer.setRenderTarget(this.pictures[0]);
+    _quad.render(renderer);
+    this.previousViewProjection.value.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
     THREE.RendererUtils.restoreRendererState(renderer, _state);
   }
 
@@ -241,6 +274,24 @@ export class Clouds extends THREE.TempNode {
     return select(inside, depth, 0).mul(this.on);
   }
 
+  // How much of a ray (from `eye` along `ray`, on the globe, metres) lies in the clouds' shadow, as far as `far`:
+  // the air there scatters no sunlight towards the eye. (Sixteen steps, closer together near the eye.)
+  shadowLength(eye, ray, far, jitter) {
+    const length = float(0).toVar();
+    If(this.on.greaterThan(0.5), () => {
+      // (the ray leaves the shadows where it leaves the low clouds; the map does not reach further than this)
+      const top = this.raySphere(eye, ray, this.bottom.add(this.shadowTop), true);
+      const reach = min(min(far, select(top.greaterThan(0), top, far)), SHADOW_REACH * 1.5).toVar(), last = float(0).toVar();
+      Loop(16, ({ i }) => {
+        const k = float(i).add(jitter).div(16), t = k.mul(k).mul(reach).toVar();
+        const next = float(i).add(1).div(16), span = next.mul(next).mul(reach).sub(last);
+        length.addAssign(exp(this.shadowDepth(eye.add(ray.mul(t))).negate()).oneMinus().mul(span));
+        last.addAssign(span);
+      });
+    });
+    return length;
+  }
+
   // What is left of the sun's light on a point of the scene (world space) under the clouds.
   sunTransmittance(world) {
     const position = this.worldToECEF.mul(vec4(world, 1)).xyz.add(this.altitude);
@@ -261,7 +312,7 @@ export class Clouds extends THREE.TempNode {
     const { worldToUnit } = atmosphere.parametersNode;
     const { opts: q, bottom, sunECEF } = this;
     const material = (name, node) => { const m = new THREE.NodeMaterial(); m.name = name; m.fragmentNode = node.context(builder.getSharedContext()); return m; };
-    const noise = (frame) => this.stbn.sample(vec3(screenCoordinate.xy.div(128), float(frame).add(0.5).div(64))).level(0).r;
+    const noise = () => this.stbn.sample(vec3(screenCoordinate.xy.div(128), this.noiseFrame.add(0.5).div(64))).level(0).r;
 
     const phase = (cosTheta, attenuation) => {
       const g = vec2(0.7, -0.2).mul(attenuation), g2 = g.mul(g);
@@ -277,11 +328,11 @@ export class Clouds extends THREE.TempNode {
 
     // ---- the clouds as the eye sees them: colour times alpha, and alpha
     this.cloudMaterial = material('Clouds', Fn(() => {
-      const at = uv(), depth = this.depth.sample(at).r.toVar();
+      const at = uv().add(this.jitter).toVar(), depth = this.depth.sample(at).r.toVar();
       const view = getViewPosition(at, float(0.5), this.inverseProjection).toVar();
       const ray = normalize(this.worldToECEF.mul(this.cameraWorld.mul(vec4(view, 0))).xyz).toVar();
       const eye = atmosphere.cameraPositionECEF.add(this.altitude).toVar(), eyeHeight = length(eye).sub(bottom).toVar();
-      const cosTheta = dot(sunECEF, ray).toVar(), jitter = noise(0).toVar();
+      const cosTheta = dot(sunECEF, ray).toVar(), jitter = noise().toVar();
       const out = vec4(0).toVar();
 
       // where the ray is inside the layers
@@ -300,14 +351,22 @@ export class Clouds extends THREE.TempNode {
       // (nothing behind what stands in the scene)
       If(depth.lessThan(1), () => { range.y.assign(min(range.y, length(getViewPosition(at, depth, this.inverseProjection)))); });
 
+      // the haze under the clouds reaches as far as the ray stays below their tops (or to what stands in the way)
+      const hazeFar = select(eyeHeight.lessThan(this.maxHeight), select(ground, this.raySphere(eye, ray, bottom, false), highOut), select(ground, this.raySphere(eye, ray, bottom, false), highOut)).toVar();
+      If(depth.lessThan(1), () => { hazeFar.assign(min(hazeFar, length(getViewPosition(at, depth, this.inverseProjection)))); });
+      const scalar = getSplitScalarIlluminance(eye.mul(worldToUnit), sunECEF).toConst();
+      const hazeSun = scalar.get('direct').toVar(), hazeSky = scalar.get('indirect').mul(this.skyScale ?? float(1)).toVar();
+
       If(range.x.greaterThanEqual(0).and(range.y.greaterThan(range.x)), () => {
         const origin = eye.add(ray.mul(range.x)).toVar(), up = normalize(origin).toVar();
         // the light of the sun and of the sky at the foot and at the top of the clouds, and on the ground
         const low = getSplitScalarIlluminance(up.mul(bottom.add(this.minHeight)).mul(worldToUnit), sunECEF).toConst();
         const high = getSplitScalarIlluminance(up.mul(bottom.add(this.maxHeight)).mul(worldToUnit), sunECEF).toConst();
-        const floor = getSplitScalarIlluminance(eye.mul(worldToUnit), sunECEF).toConst();
-        const lowSun = low.get('direct').toVar(), lowSky = low.get('indirect').toVar(), highSun = high.get('direct').toVar(), highSky = high.get('indirect').toVar();
-        const groundLight = floor.get('indirect').add(floor.get('direct').mul(this.coverage.oneMinus())).mul(0.3 / Math.PI).toVar();
+        const floor = getSplitIlluminance(eye.mul(worldToUnit), normalize(eye), sunECEF).toConst();
+        // (the sky's light by the same measure as the sky itself: see the air)
+        const skyScale = this.skyScale ?? float(1);
+        const lowSun = low.get('direct').toVar(), lowSky = low.get('indirect').mul(skyScale).toVar(), highSun = high.get('direct').toVar(), highSky = high.get('indirect').mul(skyScale).toVar();
+        const groundLight = floor.get('indirect').mul(skyScale).add(floor.get('direct').mul(this.coverage.oneMinus())).mul(0.3 / Math.PI).toVar();
 
         const radiance = vec3(0).toVar(), through = float(1).toVar(), weighted = float(0).toVar(), throughSum = float(0).toVar();
         const far = range.y.sub(range.x).toVar(), step = q.minStep.add(range.x.mul(0.01)).toVar(), distance = step.mul(jitter).mul(2).toVar();
@@ -324,13 +383,13 @@ export class Clouds extends THREE.TempNode {
             const sun = mix(lowSun, highSun, k), sky = mix(lowSky, highSky, k), normal = normalize(p).toVar();
             // towards the sun: a short march for the fine shapes, the shadow map for the rest of the way
             const marched = this.opticalDepth(p, sunECEF, q.toSun, mip, jitter).toVar(), toSun = marched.x.toVar();
-            If(height.lessThan(this.shadowTop), () => { toSun.addAssign(this.shadowDepth(p, marched.y)); });
-            const light = sun.mul(multipleScattering(toSun, cosTheta)).toVar();
+            If(height.lessThan(this.shadowTop), () => { toSun.addAssign(this.shadowDepth(p, marched.y).mul(this.tune.z)); });
+            const light = sun.mul(multipleScattering(toSun, cosTheta)).mul(this.tune.x).toVar();
             // (what the ground throws back up, under the cloud)
             If(q.toGround.greaterThan(0.5).and(height.lessThan(this.shadowTop)).and(mip.lessThan(0.5)), () => {
-              light.addAssign(groundLight.mul(exp(this.opticalDepth(p, normal.negate(), q.toGround, mip, jitter).x.negate())).mul(1 / (4 * Math.PI)));
+              light.addAssign(groundLight.mul(exp(this.opticalDepth(p, normal.negate(), q.toGround, mip, jitter).x.negate())).mul(1 / (4 * Math.PI)).mul(this.tune.w));
             });
-            light.addAssign(sky.mul(media.z).mul(1 / (4 * Math.PI)));
+            light.addAssign(sky.mul(media.z).mul(1 / (4 * Math.PI)).mul(this.tune.y));
             light.mulAssign(media.x);
             light.mulAssign(exp(media.y.mul(-150)).mul(0.8).oneMinus()); // (the dark edges of thin cloud)
             // (the scattered light summed over the step, with what the step itself takes away: Frostbite's)
@@ -347,12 +406,47 @@ export class Clouds extends THREE.TempNode {
         If(throughSum.greaterThan(0), () => {
           const alpha = remapClamped(through, float(1), q.minTransmittance).toVar();
           // the air between the eye and the cloud
-          const front = eye.add(ray.mul(range.x.add(weighted.div(throughSum))));
-          const air = getIndirectLuminanceToPoint(eye.mul(worldToUnit), front.mul(worldToUnit), vec2(0), sunECEF).toConst();
+          const frontDistance = range.x.add(weighted.div(throughSum)).toVar(), front = eye.add(ray.mul(frontDistance));
+          const shaded = this.shadowLength(eye, ray, frontDistance, jitter).mul(worldToUnit);
+          const air = getIndirectLuminanceToPoint(eye.mul(worldToUnit), front.mul(worldToUnit), vec2(shaded, 0), sunECEF).toConst();
           out.assign(vec4(radiance.mul(air.get('transmittance')).add(air.get('luminance').mul(alpha).mul(this.hazeScale ?? 1)), alpha));
+          hazeFar.assign(mix(hazeFar, min(frontDistance, hazeFar), alpha)); // (the haze ends at the cloud)
         });
       });
+
+      // Haze: thin mist under the clouds, thicker the more of them there are and the lower the eye; lit by the
+      // sun where the clouds leave it through, and by the sky.
+      const amount = remapClamped(this.coverage, float(0.2), float(0.4)).mul(3e-5).mul(exp(eyeHeight.mul(-1e-3))).toVar();
+      If(amount.greaterThan(1e-7).and(eyeHeight.greaterThanEqual(0)).and(hazeFar.greaterThan(0)), () => {
+        const here = normalize(eye), horizon = eye.sub(ray.mul(dot(eye, ray))).div(bottom);
+        const normal = mix(here, horizon, remapClamped(dot(here, horizon), float(0.9), float(1)));
+        const angle = max(dot(normal, ray), 1e-5).toVar(), linear = amount.div(1e-3).div(angle).toVar();
+        const shaded = this.shadowLength(eye, ray, hazeFar, jitter);
+        const whole = exp(hazeFar.mul(angle).mul(-1e-3)).oneMinus().toVar(), dark = exp(min(hazeFar, shaded).mul(angle).mul(-1e-3)).oneMinus();
+        const veil = clamp(exp(whole.mul(linear).negate()).oneMinus(), 0, 1).toVar(), sunlit = clamp(exp(max(whole.sub(dark).mul(linear), 0).negate()).oneMinus(), 0, 1);
+        const glow = hazeSun.mul(phase(cosTheta, 1)).mul(sunlit).add(hazeSky.mul(1 / (4 * Math.PI)).mul(veil).mul(this.tune.y)).mul(0.9 / 1.4);
+        out.assign(vec4(mix(out.rgb, glow, veil), out.a.mul(veil.oneMinus()).add(veil)));
+      });
       return out;
+    })());
+
+    // ---- the frames gathered into one picture: each frame marches one pixel in sixteen, and replaces a tenth of
+    // the picture — the picture before it, looked up where each point of the sky was then, and kept within what
+    // this frame shows around the point (so that nothing is left behind where the clouds or the view have moved)
+    this.gatherMaterial = material('Clouds.gather', Fn(() => {
+      const at = uv(), here = at.sub(this.jitter).toVar();
+      const now = this.marchedMap.sample(here).toVar(), low = vec4(now).toVar(), high = vec4(now).toVar();
+      for (const [x, y] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        const near = this.marchedMap.sample(here.add(vec2(x, y).mul(this.marchTexel)));
+        low.assign(min(low, near)); high.assign(max(high, near));
+      }
+      // (clouds are far off: where a point two kilometres along the ray was in the picture before)
+      const view = getViewPosition(at, float(0.5), this.inverseProjection);
+      const far = this.eyeWorld.add(normalize(this.cameraWorld.mul(vec4(view, 0)).xyz).mul(2000));
+      const clip = this.previousViewProjection.mul(vec4(far, 1)).toVar(), was = vec2(clip.x.div(clip.w).mul(0.5).add(0.5), clip.y.div(clip.w).mul(0.5).add(0.5).oneMinus()).toVar();
+      const seen = clip.w.greaterThan(0).and(was.x.greaterThan(0)).and(was.x.lessThan(1)).and(was.y.greaterThan(0)).and(was.y.lessThan(1));
+      const before = clamp(this.before.sample(was), low, high);
+      return mix(before, now, select(seen, this.blend, 1));
     })());
 
     // ---- the clouds seen from the sun: where they begin, how thick they are (see shadowDepth)
@@ -386,5 +480,5 @@ export class Clouds extends THREE.TempNode {
     return this.result;
   }
 
-  dispose() { this.target.dispose(); this.shadowTarget.dispose(); }
+  dispose() { this.marched.dispose(); for (const p of this.pictures) p.dispose(); this.shadowTarget.dispose(); }
 }

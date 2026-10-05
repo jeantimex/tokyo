@@ -5,7 +5,7 @@
 // frame: matrixWorldToECEF places it on the globe, and the colour buffer is scaled into the atmosphere's units
 // before it and back after.
 import * as THREE from 'three/webgpu';
-import { pass, context, uniform, vec2, vec3, vec4, Fn, If, mix, uv, positionGeometry, rtt } from 'three/tsl';
+import { pass, context, uniform, vec2, vec3, vec4, Fn, If, mix, uv, positionGeometry, rtt, float, fract, sin, dot, normalize, length, screenCoordinate } from 'three/tsl';
 import { bloomOver } from './bloom.js';
 import { ao as gtao } from 'three/addons/tsl/display/GTAONode.js';
 import { windowReflections } from './reflections.js';
@@ -50,6 +50,9 @@ class AirNode extends THREE.TempNode {
     const { worldToUnit } = atmosphere.parametersNode;
     const { matrixWorldToECEF, sunDirectionECEF, cameraPositionUnit, altitudeCorrectionUnit } = atmosphere;
     const depth = this.depthNode.r.toConst(), eye = cameraPositionUnit.add(altitudeCorrectionUnit);
+    const eyeMetres = atmosphere.cameraPositionECEF.add(atmosphere.altitudeCorrectionECEF);
+    // (a little noise hides the steps of the march through the clouds' shadow)
+    const grain = fract(sin(dot(screenCoordinate.xy, vec2(12.9898, 78.233))).mul(43758.5453));
 
     return Fn(() => {
       const out = this.colorNode.toVar();
@@ -61,7 +64,9 @@ class AirNode extends THREE.TempNode {
         // mirrored at the horizon (capped, so that no second sun appears below) instead of a planet's surface.
         const up = cameraPositionUnit.normalize().toConst(), below = ray.dot(up).min(0).toConst();
         const direction = ray.sub(up.mul(below.mul(2))).toConst();
-        const transfer = getIndirectLuminance(eye, direction, vec2(0), sunDirectionECEF).toConst();
+        // (the air in the clouds' shadow scatters no sunlight)
+        const shaded = this.clouds.shadowLength(eyeMetres, direction, float(2e5), grain).mul(worldToUnit);
+        const transfer = getIndirectLuminance(eye, direction, vec2(shaded, 0), sunDirectionECEF).toConst();
         const sky = vec3(0).toVar();
         this.sunNode.rayDirectionECEF = direction;
         sky.assign(mix(sky, this.sunNode.rgb, this.sunNode.a));
@@ -75,7 +80,9 @@ class AirNode extends THREE.TempNode {
         const view = screenToPositionView(uv(), depth, viewZ, projectionMatrix(camera), inverseProjectionMatrix(camera));
         const world = inverseViewMatrix(camera).mul(vec4(view, 1)).xyz;
         const point = matrixWorldToECEF.mul(vec4(world, 1)).xyz.mul(worldToUnit).add(altitudeCorrectionUnit);
-        const transfer = getIndirectLuminanceToPoint(eye, point, vec2(0), sunDirectionECEF).toConst();
+        const metres = matrixWorldToECEF.mul(vec4(world, 1)).xyz.add(atmosphere.altitudeCorrectionECEF).sub(eyeMetres).toVar();
+        const shaded = this.clouds.shadowLength(eyeMetres, normalize(metres), length(metres), grain).mul(worldToUnit);
+        const transfer = getIndirectLuminanceToPoint(eye, point, vec2(shaded, 0), sunDirectionECEF).toConst();
         // (the scene is lit by its own lights: the shadow of the clouds is laid over it here)
         const sunlit = mix(SHADE, 1, this.clouds.sunTransmittance(world));
         out.rgb.assign(out.rgb.mul(sunlit).mul(transfer.get('transmittance')).add(transfer.get('luminance').mul(this.hazeScale)));
@@ -108,6 +115,7 @@ export class Atmosphere {
     const atmosphere = this.context = new AtmosphereContext();
     atmosphere.camera = camera;
     atmosphere.raymarchScattering = false;
+    atmosphere.accurateShadowScattering = false; // (the shadowed stretch of a ray is taken off its far end, as the effect did)
     atmosphere.showGround = false; // no dark planet below the horizon: beyond the area there is only sky
     atmosphere.matrixWorldToECEF.value.copy(this.worldToECEF);
     renderer.contextNode = context({ ...renderer.contextNode.value, getAtmosphere: () => atmosphere });
@@ -142,7 +150,7 @@ export class Atmosphere {
     // volumetric clouds: drawn into a picture of their own, which the air lays over the scene
     const clouds = this.clouds = new Clouds(camera, depth, atmosphere, this.worldToECEF, bounds);
     const air = this.air = new AirNode(vec4(shaded.mul(units), 1), depth, clouds);
-    clouds.hazeScale = air.hazeScale;
+    clouds.hazeScale = air.hazeScale; clouds.skyScale = air.skyScale;
     const lit = rtt(air.rgb.div(units)); // (once for the bloom and for the picture)
     const glow = bloomOver(lit, { intensity: 0.5, threshold: 0.9, smoothing: 0.2 });
     this.pipeline = new THREE.RenderPipeline(renderer);
