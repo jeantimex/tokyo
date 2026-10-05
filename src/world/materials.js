@@ -90,12 +90,14 @@ const pGlint = property('vec3', 'pGlint'), pSunlit = property('float', 'pSunlit'
 export const pPane = property('float', 'pPane'); // how much of a mirror this fragment is: window glass
 
 // ---------------------------------------------------------------- facade
-const NO_PHOTO = blank();
+export const NO_PHOTO = blank();
 
-// One instance per tile that has a wall photo atlas; set it with material.userData.photo.value / photoOn.value.
+// One material for all the tiles: a tile's wall photo atlas is its mesh's own (mesh.userData.photo, a texture,
+// and mesh.userData.photoOn, 0 or 1), so that the shader is worked out once and not once per tile.
 function facadeMaterial(tex) {
   const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
-  const photo = m.userData.photo = texture(NO_PHOTO), photoOn = m.userData.photoOn = uniform(0);
+  const photo = texture(NO_PHOTO).onObjectUpdate(({ object }) => object?.userData.photo ?? NO_PHOTO);
+  const photoOn = uniform(0).onObjectUpdate(({ object }) => object?.userData.photoOn ?? 0);
   const wallScale = uniformArray(tex.wall.scales), wallDetail = uniformArray(tex.wall.details);
   const { uNight, uTime, uWindowLife, uCityGlass, uNightBlue, uSunDir, uSunGlint, uGlintOn, uPhotoRange, uPhotoMix } = shared;
 
@@ -429,7 +431,6 @@ function groundMaterial(tex, { fixedLayer = -1, vertexColors = false, ...params 
 export function createMaterials(tex) {
   return {
     facade: facadeMaterial(tex),
-    facadeFor: () => facadeMaterial(tex), // a tile's own instance, for its wall photos
     // Ground not covered by roads or buildings: private lots, car parks, yards.
     terrain: groundMaterial(tex, { fixedLayer: 3, color: new THREE.Color().setRGB(0.2, 0.2, 0.185) }),
     road: groundMaterial(tex, { vertexColors: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }),

@@ -5,7 +5,7 @@ import { tileKey } from '../shared/geo.js';
 import { sampleGrid } from '../shared/terrain.js';
 import { makeSurface, makeCover } from '../shared/decks.js';
 import { SIGN_LOD_DISTANCE } from './signs.js';
-import { shared } from './materials.js';
+import { shared, NO_PHOTO } from './materials.js';
 
 const WORKERS = Math.min(4, Math.max(2, (navigator.hardwareConcurrency || 4) >> 1));
 const MAX_IN_FLIGHT = WORKERS * 2;
@@ -168,15 +168,14 @@ export class Streamer {
       const walls = this.available.get(msg.key).walls;
       const m = new THREE.Mesh(
         geometry(buildings, [['position', 3], ['normal', 3], ['color', 3], ['aFacade', 4], ['aBldg', 4], ['aPhoto', 2]]),
-        walls ? this.materials.facadeFor() : this.materials.facade,
+        this.materials.facade,
       );
       if (walls) { // the tile's wall photos, blended in by the facade shader with distance
-        group.userData.own = [m.material]; // (kept off the mesh: its userData is the picking record)
-        atlases.push(this.atlas(msg.key, t, walls, WALLS_FULL, (map) => { m.material.userData.photo.value = map; m.material.userData.photoOn.value = 1; }));
+        atlases.push(this.atlas(msg.key, t, walls, WALLS_FULL, (map) => { m.userData.photo = map; m.userData.photoOn = 1; }));
       }
       m.castShadow = true;
       m.receiveShadow = true;
-      m.userData = { tile: msg.key, info, ends: buildings.ends, facade: true };
+      m.userData = { tile: msg.key, info, ends: buildings.ends, facade: true, photo: NO_PHOTO, photoOn: 0 }; // (photo: see the facade material)
       group.add(m);
     }
     if (models) { // PLATEAU's own models of bridges, street furniture and trees
