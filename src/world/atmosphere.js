@@ -9,11 +9,13 @@ import { pass, context, uniform, vec2, vec3, vec4, Fn, If, mix, uv, positionGeom
 import { bloomOver } from './bloom.js';
 import { ao as gtao } from 'three/addons/tsl/display/GTAONode.js';
 import { windowReflections } from './reflections.js';
+import { Clouds } from './clouds.js';
 import { getSunDirectionECEF, getMoonDirectionECEF } from '@takram/three-atmosphere';
 import { AtmosphereContext, getAtmosphereContext, getIndirectLuminance, getIndirectLuminanceToPoint, SunNode, MoonNode } from '@takram/three-atmosphere/webgpu';
 import { depthToViewZ, screenToPositionView, projectionMatrix, inverseProjectionMatrix, inverseViewMatrix } from '@takram/three-geospatial/webgpu';
 import { Ellipsoid, Geodetic, radians } from '@takram/three-geospatial';
 
+const SHADE = 0.42; // what is left of a surface's light under a thick cloud: the sky still lights it
 const UNITS = 0.1; // scene radiance -> the radiance the atmosphere works in (a sunlit white wall in both)
 
 // The node version of the library gives a brighter sky and a thicker haze than its WebGL effect, for which the
@@ -32,8 +34,9 @@ const skyScale = (elevation) => {
 class AirNode extends THREE.TempNode {
   static get type() { return 'AirNode'; }
 
-  constructor(colorNode, depthNode) {
+  constructor(colorNode, depthNode, clouds) {
     super('vec4');
+    this.clouds = clouds;
     this.colorNode = colorNode;
     this.depthNode = depthNode;
     this.sunNode = new SunNode();
@@ -73,8 +76,12 @@ class AirNode extends THREE.TempNode {
         const world = inverseViewMatrix(camera).mul(vec4(view, 1)).xyz;
         const point = matrixWorldToECEF.mul(vec4(world, 1)).xyz.mul(worldToUnit).add(altitudeCorrectionUnit);
         const transfer = getIndirectLuminanceToPoint(eye, point, vec2(0), sunDirectionECEF).toConst();
-        out.rgb.assign(out.rgb.mul(transfer.get('transmittance')).add(transfer.get('luminance').mul(this.hazeScale)));
+        // (the scene is lit by its own lights: the shadow of the clouds is laid over it here)
+        const sunlit = mix(SHADE, 1, this.clouds.sunTransmittance(world));
+        out.rgb.assign(out.rgb.mul(sunlit).mul(transfer.get('transmittance')).add(transfer.get('luminance').mul(this.hazeScale)));
       });
+      const overlay = vec4(this.clouds).mul(this.clouds.on);
+      out.rgb.assign(out.rgb.mul(overlay.a.oneMinus()).add(overlay.rgb));
       return out;
     })();
   }
@@ -83,9 +90,12 @@ class AirNode extends THREE.TempNode {
 // ambient occlusion: the reach in metres, and how dark
 const AO = { radius: 7, scale: 1, thickness: 1, falloff: 1, samples: 16, colour: [0.02, 0.02, 0.03] };
 
+const ORIGIN = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
+
 export class Atmosphere {
   // origin: { lon, lat } of the world origin; the world is x east, y up, z south.
-  constructor(renderer, scene, camera, origin) {
+  // bounds: { minX, maxX, minZ, maxZ } of the area; the clouds can be kept to the sky above it.
+  constructor(renderer, scene, camera, origin, bounds) {
     this.renderer = renderer;
 
     // ---- where the scene sits on the globe
@@ -129,7 +139,10 @@ export class Atmosphere {
     this.aoOn = uniform(1);
     const shade = ao.getTextureNode().r.oneMinus().mul(this.aoOn).oneMinus();
     const shaded = seen.mul(mix(vec3(AO.colour[0], AO.colour[1], AO.colour[2]), vec3(1), shade));
-    const air = this.air = new AirNode(vec4(shaded.mul(units), 1), depth);
+    // volumetric clouds: drawn into a picture of their own, which the air lays over the scene
+    const clouds = this.clouds = new Clouds(camera, depth, atmosphere, this.worldToECEF, bounds);
+    const air = this.air = new AirNode(vec4(shaded.mul(units), 1), depth, clouds);
+    clouds.hazeScale = air.hazeScale;
     const lit = rtt(air.rgb.div(units)); // (once for the bloom and for the picture)
     const glow = bloomOver(lit, { intensity: 0.5, threshold: 0.9, smoothing: 0.2 });
     this.pipeline = new THREE.RenderPipeline(renderer);
@@ -150,6 +163,7 @@ export class Atmosphere {
     const toWorld = this.toWorld ??= this.rotation.clone().transpose();
     const sun = this.sun.clone().applyMatrix3(toWorld);
     this.air.skyScale.value = skyScale(THREE.MathUtils.radToDeg(Math.asin(sun.y)));
+    this.sunWorld = sun;
     return { sun, moon: this.moon.clone().applyMatrix3(toWorld) };
   }
 
@@ -158,8 +172,23 @@ export class Atmosphere {
   get occlusion() { return this.aoOn.value > 0.5; }
   set occlusion(v) { this.aoOn.value = v ? 1 : 0; }
 
+  get cloudsOn() { return this.clouds.enabled; } // (volumetric clouds are heavy: off until asked for)
+  set cloudsOn(v) { this.clouds.enabled = v; }
+  get coverage() { return this.clouds.coverage.value; }
+  set coverage(v) { this.clouds.coverage.value = v; }
+  // Altitude of the base of the two low cloud layers (the second starts 250 m above the first).
+  get base() { return this.clouds.base; }
+  set base(v) { this.clouds.base = v; }
+  // clouds over the area only, or over the whole sky
+  get overCity() { return this.clouds.overCity; }
+  set overCity(v) { this.clouds.overCity = v; }
+  get quality() { return this.clouds.quality; }
+  set quality(v) { this.clouds.quality = v; }
+
   setSize() { /* the pipeline follows the renderer */ }
-  render() {
+  // dt: seconds since the last frame; focus: the point looked at.
+  render(dt = 0, focus = ORIGIN) {
+    this.clouds.update(dt, focus, this.sunWorld ?? UP);
     this.pipeline.render();
     if (this.lutSteps && this.lutSteps.steps.next().done) { this.lutSteps.done(); this.lutSteps = null; }
   }

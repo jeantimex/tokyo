@@ -110,6 +110,7 @@ const waterMirror = new WaterMirror(renderer);
 // post-processing: ambient occlusion, sky, aerial perspective, volumetric clouds, bloom, tone mapping
 const atmosphere = new Atmosphere(renderer, scene, camera, manifest.origin, manifest.bounds);
 if (params.get('reflect') === '0') atmosphere.reflect = false;
+if (Number(params.get('clouds')) > 0) { atmosphere.coverage = Number(params.get('clouds')); atmosphere.cloudsOn = true; }
 let orthoLoaded = false, orthoWanted = true; // (the photo fills in when the tiles arrive; the panel may have switched it off by then)
 if (params.get('ortho') !== '0') loadOrtho(`ortho/${AREA}`, proj, manifest.bounds, renderer).then((ok) => { orthoLoaded = ok; shared.uOrthoOn.value = ok && orthoWanted ? 1 : 0; });
 const railways = await buildRailways(`tiles/${AREA}/${manifest.rails}`, (x, z) => streamer.ground(x, z), streamer.cover);
@@ -142,6 +143,7 @@ let guiState, clockText;
     get trains() { return trains.visible; }, set trains(v) { trains.visible = v; },
     get photo() { return orthoWanted; }, set photo(v) { orthoWanted = v; shared.uOrthoOn.value = v && orthoLoaded ? 1 : 0; },
     get shadows() { return env.sun.castShadow; }, set shadows(v) { env.sun.castShadow = v; },
+    get occlusion() { return atmosphere.occlusion; }, set occlusion(v) { atmosphere.occlusion = v; },
     bloom: true,
     // the whole city at once, or only what lies within the view radius of the point looked at (fewer tiles: more frames)
     wholeCity: false, near: Number(params.get('radius')) || 900,
@@ -183,6 +185,13 @@ let guiState, clockText;
   rooms.add(shared.uWindowLife.value, 'y', 0.2, 30, 0.1).name('pace');
   rooms.add(shared.uCityGlass, 'value', 0, 3, 0.05).name('city in tower glass');
   rooms.add(shared.uNightBlue, 'value', 0, 1, 0.05).name('blue lights');
+  const sky = gui.addFolder('Clouds');
+  sky.add(atmosphere, 'cloudsOn').name('clouds');
+  sky.add(atmosphere, 'coverage', 0, 1, 0.05);
+  sky.add(atmosphere, 'base', 200, 2000, 50).name('base altitude (m)');
+  sky.add(atmosphere, 'overCity').name('over the city only');
+  sky.add(atmosphere, 'quality', ['low', 'medium', 'high', 'ultra']);
+  sky.add(atmosphere.clouds.velocity, 'x', 0, 0.02, 0.0005).name('wind');
   const walls = gui.addFolder('Wall photos');
   walls.add(shared.uPhotoMix, 'value', 0, 1, 0.05).name('amount');
   walls.add(shared.uPhotoRange.value, 'x', 0, 1000, 10).name('from (m)');
@@ -192,6 +201,7 @@ let guiState, clockText;
   quality.add(state, 'radius', 300, 3000, 50).name('view radius (m), if not');
   quality.add(atmosphere, 'reflect').name('window and water reflections');
   quality.add(shared.uGlintOn, 'value', 0, 1, 1).name('sun in the windows');
+  quality.add(state, 'occlusion').name('ambient occlusion');
   quality.add(state, 'shadows');
   quality.add(state, 'bloom');
 
@@ -287,6 +297,7 @@ addEventListener('resize', () => {
 
 // ---------------------------------------------------------------- loop
 const hud = document.getElementById('hud');
+scene.matrixWorldAutoUpdate = false; // (see tick)
 const clock = new THREE.Clock();
 let frames = 0, fpsTime = 0, fps = 0;
 
@@ -321,11 +332,13 @@ function tick() {
   clockText.textContent = clockTime.label();
   env.update(dt);
   env.follow(controls.target, camera);
+  // (the scene is drawn several times a frame — lamp light, mirror, shadows, picture — and is placed once for all)
+  scene.updateMatrixWorld();
   lampLight.update(scene, controls.target, camera.position, env.night);
   atmosphere.bloom.value = guiState.bloom ? env.bloom * 3 : 0;
   waterMirror.enabled = atmosphere.reflect;
   waterMirror.update(scene, camera, streamer.tiles, controls.target, [traffic.group.parent ? null : traffic.group]);
-  atmosphere.render(dt);
+  atmosphere.render(dt, controls.target);
 
   frames++; fpsTime += dt;
   if (fpsTime >= 0.5) { fps = frames / fpsTime; frames = 0; fpsTime = 0; }

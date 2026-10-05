@@ -4,7 +4,7 @@
 // brighter of the two (lights never pile up into a glare), and every lit surface that faces the sky takes its
 // lamp light from that map — as light on its own colour, so asphalt stays asphalt and paint stays paint.
 import * as THREE from 'three/webgpu';
-import { Fn, uniform, texture, vec2, vec3, vec4, smoothstep, step, positionWorld, normalWorldGeometry, diffuseColor, materialColor, vertexColor, uv } from 'three/tsl';
+import { Fn, uniform, renderGroup, texture, vec2, vec3, vec4, smoothstep, step, positionWorld, normalWorldGeometry, diffuseColor, materialColor, vertexColor, uv } from 'three/tsl';
 
 export const LAMP_LAYER = 2; // the layer the lamp quads live on: the picture's camera does not see it
 const SIZE = 2048;
@@ -12,8 +12,8 @@ const Y0 = 200, YSPAN = 1000; // heights are stored as (y + Y0) / YSPAN
 
 const target = new THREE.RenderTarget(SIZE, SIZE, { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
 const lampMap = texture(target.texture);
-const lampOn = uniform(0);
-const lampRect = uniform(new THREE.Vector4(0, 0, 1, 0)); // centre x, centre z, half size, 0
+const lampOn = uniform(0).setGroup(renderGroup);
+const lampRect = uniform(new THREE.Vector4(0, 0, 1, 0)).setGroup(renderGroup); // centre x, centre z, half size, 0
 
 // Material for a lamp quad: `map` is the footprint; the colour (times the vertex colour, if any) is the light.
 export function lampMaterial(map, { vertexColors = false } = {}) {

@@ -8,7 +8,7 @@
 //   aBldg    x: building height (m), y: category + 8 * texture layer, z: kind (KIND), w: bay width (m, 0 = no windows)
 import * as THREE from 'three/webgpu';
 import {
-  Fn, If, uniform, uniformArray, texture, attribute, property, float, int, vec2, vec3, vec4, select, mix, step, smoothstep, floor, fract, abs, max, min,
+  Fn, If, uniform, renderGroup, uniformArray, texture, attribute, property, float, int, vec2, vec3, vec4, select, mix, step, smoothstep, floor, fract, abs, max, min,
   dot, cross, normalize, length, reflect, pow, exp, sin, clamp, fwidth, distance, positionWorld, normalWorldGeometry, cameraPosition, transformNormalToView,
   materialColor, output,
 } from 'three/tsl';
@@ -18,24 +18,26 @@ import { lampLit } from './lamplight.js';
 const blank = () => { const t = new THREE.DataTexture(new Uint8Array([128, 128, 128, 255]), 1, 1); t.needsUpdate = true; return t; };
 
 // Values shared by the materials, as node uniforms: set them through .value.
+// (one copy for all the materials, brought up to date once per rendering: not one per object)
+const su = (value) => uniform(value).setGroup(renderGroup);
 export const shared = {
-  uNight: uniform(0), // 0 day .. 1 night: how far the lights are on
-  uDark: uniform(0),  // 0 day .. 1 night: how dark it is
-  uTime: uniform(0),  // seconds, for wind and signals
+  uNight: su(0), // 0 day .. 1 night: how far the lights are on
+  uDark: su(0),  // 0 day .. 1 night: how dark it is
+  uTime: su(0),  // seconds, for wind and signals
   // aerial photo over the area: texture, and its rectangle in world x/z as (minX, minZ, sizeX, sizeZ)
-  uOrtho: texture(blank()), uOrthoRect: uniform(new THREE.Vector4(0, 0, 1, 1)), uOrthoOn: uniform(0),
+  uOrtho: texture(blank()), uOrthoRect: su(new THREE.Vector4(0, 0, 1, 1)), uOrthoOn: su(0),
   // lit windows at night: the share of rooms whose light comes and goes, and how fast (1: every 1.5 to 5.5 minutes)
-  uWindowLife: uniform(new THREE.Vector2(0.5, 4)),
+  uWindowLife: su(new THREE.Vector2(0.5, 4)),
   // how strongly the glass of tall buildings mirrors the lights of the city at night (0: off)
-  uCityGlass: uniform(1),
+  uCityGlass: su(1),
   // how blue the lights of the city are at night (0: mostly warm, 1: a cool blue city)
-  uNightBlue: uniform(0.55),
+  uNightBlue: su(0.55),
   // the sun in the window glass: direction to the sun (world), and its colour times how much of it there is
-  uSunDir: uniform(new THREE.Vector3(0, 1, 0)), uSunGlint: uniform(new THREE.Color(0, 0, 0)), uGlintOn: uniform(1),
+  uSunDir: su(new THREE.Vector3(0, 1, 0)), uSunGlint: su(new THREE.Color(0, 0, 0)), uGlintOn: su(1),
   // wall photos: the distances (m) between which a facade goes from generated to photo, and how much photo at most
-  uPhotoRange: uniform(new THREE.Vector2(140, 420)), uPhotoMix: uniform(1),
+  uPhotoRange: su(new THREE.Vector2(140, 420)), uPhotoMix: su(1),
   // the mirror picture of the world in the water (mirror.js), and the matrix from a world point to its place in it
-  uMirror: texture(blank()), uMirrorMatrix: uniform(new THREE.Matrix4()), uMirrorOn: uniform(0),
+  uMirror: texture(blank()), uMirrorMatrix: su(new THREE.Matrix4()), uMirrorOn: su(0),
 };
 
 // ---------------------------------------------------------------- noise

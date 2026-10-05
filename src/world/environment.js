@@ -5,6 +5,15 @@ import { shared } from './materials.js';
 
 const SHADOW_SIZE = 4096;
 
+// The renderer draws every shadow caster with one material, on which it sets each caster's alphaTest in turn;
+// three counts that as a change of the material whenever a cut-out follows a solid, and then checks every
+// caster's shader again, every frame. Each caster keeps its own shader as it is: nothing has changed.
+const alphaTest = Object.getOwnPropertyDescriptor(THREE.Material.prototype, 'alphaTest');
+Object.defineProperty(THREE.NodeMaterial.prototype, 'alphaTest', {
+  get() { return this._alphaTest; },
+  set(v) { if (this.isShadowPassMaterial) this._alphaTest = v; else alphaTest.set.call(this, v); },
+});
+
 const DAY = { hemi: 0.55, sun: 3.4, sunColor: new THREE.Color(0xfff0dc), env: 1.0, exposure: 0.82, bloom: 0.12 };
 const NIGHT = {
   hemi: 0.42, sun: 0.32, sunColor: new THREE.Color(0x9fb4e0),
