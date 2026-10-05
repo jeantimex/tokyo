@@ -21,11 +21,12 @@ export function lampMaterial(map, { vertexColors = false } = {}) {
     side: THREE.DoubleSide, depthTest: false, depthWrite: false, transparent: true,
     blending: THREE.CustomBlending, blendEquation: THREE.MaxEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
   });
-  m.map = map; // (kept for those who share it)
+  m.map = map;
   // The height the light lies at goes into the alpha channel, so that a lamp under a flyover does not light
   // the deck above it, nor a car on the deck the street below.
   m.outputNode = Fn(() => {
-    const light = texture(map, uv()).rgb.mul(materialColor).mul(vertexColors ? vertexColor().rgb : vec3(1)).toVar();
+    // (materialColor: the material's colour times its map)
+    const light = materialColor.rgb.mul(vertexColors ? vertexColor().rgb : vec3(1)).toVar();
     const height = positionWorld.y.add(Y0).div(YSPAN);
     return vec4(light, step(0.004, light.r.add(light.g).add(light.b)).mul(height));
   })();
@@ -35,7 +36,7 @@ export function lampMaterial(map, { vertexColors = false } = {}) {
 // The lamp light falling on the surface being drawn (to be multiplied by its colour).
 const lampGlow = Fn(() => {
   const at = positionWorld;
-  const lampUv = vec2(at.x.sub(lampRect.x), lampRect.y.sub(at.z)).div(lampRect.z.mul(2)).add(0.5).toVar();
+  const lampUv = vec2(at.x.sub(lampRect.x), at.z.sub(lampRect.y)).div(lampRect.z.mul(2)).add(0.5).toVar();
   const edge = smoothstep(vec2(0), vec2(0.04), lampUv).mul(smoothstep(vec2(0.96), vec2(1), lampUv).oneMinus());
   const up = smoothstep(0.25, 0.7, normalWorldGeometry.y);
   const texel = lampMap.sample(lampUv);

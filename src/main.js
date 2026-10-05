@@ -16,7 +16,7 @@ import { Traffic, MAX_CARS } from './world/traffic.js';
 import { buildStructures } from './world/structures.js';
 import { loadOrtho } from './world/ortho.js';
 import { Environment } from './world/environment.js';
-import { Atmosphere, BLOOM_SCALE } from './world/atmosphere.js';
+import { Atmosphere } from './world/atmosphere.js';
 import { createBirds, MAX_BIRDS } from './world/birds.js';
 import { loadBackdrop } from './world/backdrop.js';
 import { WaterMirror } from './world/mirror.js';
@@ -322,7 +322,7 @@ function tick() {
   env.update(dt);
   env.follow(controls.target, camera);
   lampLight.update(scene, controls.target, camera.position, env.night);
-  atmosphere.bloom.value = guiState.bloom ? env.bloom * 3 * BLOOM_SCALE : 0;
+  atmosphere.bloom.value = guiState.bloom ? env.bloom * 3 : 0;
   waterMirror.enabled = atmosphere.reflect;
   waterMirror.update(scene, camera, streamer.tiles, controls.target, [traffic.group.parent ? null : traffic.group]);
   atmosphere.render(dt);
@@ -340,8 +340,8 @@ function tick() {
       `${picked.storeys ? `, ${picked.storeys} floors` : ''}, base ${picked.base.toFixed(1)} m\n` : '') +
     `\ndrag pan · right-drag rotate · wheel zoom\nWASD move (shift fast) · N day/night · click building`;
 }
-function frame() { tick(); requestAnimationFrame(frame); }
+function frame() { if (!window.__pause) tick(); requestAnimationFrame(frame); } // (__pause: for tools)
 requestAnimationFrame(frame);
 
 // (for the console and for tools: tick() draws a frame by hand, clockTime sets the hour)
-window.__app = { THREE, scene, camera, controls, streamer, env, renderer, materials, atmosphere, traffic, shared, tick, clockTime };
+window.__app = { THREE, lampLight, scene, camera, controls, streamer, env, renderer, materials, atmosphere, traffic, shared, tick, clockTime };

@@ -6,7 +6,7 @@
 // before it and back after.
 import * as THREE from 'three/webgpu';
 import { pass, context, uniform, vec2, vec3, vec4, Fn, If, mix, uv, positionGeometry, rtt } from 'three/tsl';
-import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { bloomOver } from './bloom.js';
 import { ao as gtao } from 'three/addons/tsl/display/GTAONode.js';
 import { windowReflections } from './reflections.js';
 import { getSunDirectionECEF, getMoonDirectionECEF } from '@takram/three-atmosphere';
@@ -19,7 +19,6 @@ const UNITS = 0.1; // scene radiance -> the radiance the atmosphere works in (a 
 // The node version of the library gives a brighter sky and a thicker haze than its WebGL effect, for which the
 // picture was balanced: both are brought back to that.
 const SKY_SCALE = 0.67, HAZE_SCALE = 0.7;
-export const BLOOM_SCALE = 0.11; // three's bloom node against the bloom effect the amounts were chosen for
 
 // The air over the scene's picture: what is left of each surface's light on its way to the eye plus the light
 // scattered into that path, and the sky where there is no surface. (The library's AerialPerspectiveNode, with
@@ -125,11 +124,11 @@ export class Atmosphere {
     const shade = ao.getTextureNode().r.oneMinus().mul(this.aoOn).oneMinus();
     const shaded = seen.mul(mix(vec3(AO.colour[0], AO.colour[1], AO.colour[2]), vec3(1), shade));
     const air = this.air = new AirNode(vec4(shaded.mul(units), 1), depth);
-    const lit = rtt(air.rgb.div(units)).rgb; // (once for the bloom and for the picture)
-    this.bloomNode = bloom(lit, 0.5, 0.4, 0.9);
+    const lit = rtt(air.rgb.div(units)); // (once for the bloom and for the picture)
+    const glow = bloomOver(lit, { intensity: 0.5, threshold: 0.9, smoothing: 0.2 });
     this.pipeline = new THREE.RenderPipeline(renderer);
-    this.pipeline.outputNode = vec4(lit.add(this.bloomNode.rgb), 1);
-    this.bloom = this.bloomNode.strength; // (.value: how strong)
+    this.pipeline.outputNode = vec4(glow.node, 1);
+    this.bloom = glow.intensity; // (.value: how strong)
 
     this.sun = new THREE.Vector3(); this.moon = new THREE.Vector3();
   }
