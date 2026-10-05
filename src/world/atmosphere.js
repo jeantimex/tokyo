@@ -5,8 +5,10 @@
 // frame: matrixWorldToECEF places it on the globe, and the colour buffer is scaled into the atmosphere's units
 // before it and back after.
 import * as THREE from 'three/webgpu';
-import { pass, context, uniform, vec2, vec3, vec4, Fn, If, mix, uv, positionGeometry } from 'three/tsl';
+import { pass, context, uniform, vec2, vec3, vec4, Fn, If, mix, uv, positionGeometry, rtt } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { ao as gtao } from 'three/addons/tsl/display/GTAONode.js';
+import { windowReflections } from './reflections.js';
 import { getSunDirectionECEF, getMoonDirectionECEF } from '@takram/three-atmosphere';
 import { AtmosphereContext, getAtmosphereContext, getIndirectLuminance, getIndirectLuminanceToPoint, SunNode, MoonNode } from '@takram/three-atmosphere/webgpu';
 import { depthToViewZ, screenToPositionView, projectionMatrix, inverseProjectionMatrix, inverseViewMatrix } from '@takram/three-geospatial/webgpu';
@@ -73,6 +75,9 @@ class AirNode extends THREE.TempNode {
   }
 }
 
+// ambient occlusion: the reach in metres, and how dark
+const AO = { radius: 7, scale: 1, thickness: 1, falloff: 1, samples: 16, colour: [0.02, 0.02, 0.03] };
+
 export class Atmosphere {
   // origin: { lon, lat } of the world origin; the world is x east, y up, z south.
   constructor(renderer, scene, camera, origin) {
@@ -107,15 +112,26 @@ export class Atmosphere {
     const colour = scenePass.getTextureNode('output'), depth = scenePass.getTextureNode('depth');
     const units = this.units = uniform(UNITS);
     this.skyOn = uniform(1);
-    const air = this.air = new AirNode(vec4(colour.rgb.mul(units), colour.a), depth);
-    const lit = air.rgb.div(units);
+    // window glass reflects what is on screen (first of all: it reads the panes marked in the alpha channel)
+    const reflections = this.reflections = windowReflections(colour, depth, camera);
+    this.reflectOn = uniform(1);
+    const reflected = rtt(reflections.node);
+    const seen = this.reflectOn.greaterThan(0.5).select(reflected.rgb, colour.rgb);
+    // ambient occlusion: contact shading between buildings and the ground
+    const ao = this.ao = gtao(depth, null, camera);
+    ao.resolutionScale = 0.5;
+    ao.radius.value = AO.radius; ao.scale.value = AO.scale; ao.thickness.value = AO.thickness; ao.distanceFallOff.value = AO.falloff; ao.samples.value = AO.samples;
+    this.aoOn = uniform(1);
+    const shade = ao.getTextureNode().r.oneMinus().mul(this.aoOn).oneMinus();
+    const shaded = seen.mul(mix(vec3(AO.colour[0], AO.colour[1], AO.colour[2]), vec3(1), shade));
+    const air = this.air = new AirNode(vec4(shaded.mul(units), 1), depth);
+    const lit = rtt(air.rgb.div(units)).rgb; // (once for the bloom and for the picture)
     this.bloomNode = bloom(lit, 0.5, 0.4, 0.9);
     this.pipeline = new THREE.RenderPipeline(renderer);
     this.pipeline.outputNode = vec4(lit.add(this.bloomNode.rgb), 1);
     this.bloom = this.bloomNode.strength; // (.value: how strong)
 
     this.sun = new THREE.Vector3(); this.moon = new THREE.Vector3();
-    this.reflect = true;
   }
 
   // Puts the sun and the moon where they stand over the area at `date`. Returns their directions in world
@@ -129,6 +145,11 @@ export class Atmosphere {
     const toWorld = this.toWorld ??= this.rotation.clone().transpose();
     return { sun: this.sun.clone().applyMatrix3(toWorld), moon: this.moon.clone().applyMatrix3(toWorld) };
   }
+
+  get reflect() { return this.reflectOn.value > 0.5; }
+  set reflect(v) { this.reflectOn.value = v ? 1 : 0; }
+  get occlusion() { return this.aoOn.value > 0.5; }
+  set occlusion(v) { this.aoOn.value = v ? 1 : 0; }
 
   setSize() { /* the pipeline follows the renderer */ }
   render() {

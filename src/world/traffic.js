@@ -10,7 +10,7 @@
 //   - where lanes merge, vehicles queue instead of entering side by side
 //   - never enter a junction without room on the far side
 import * as THREE from 'three/webgpu';
-import { attribute, varyingProperty, select, vec3, float, max } from 'three/tsl';
+import { attribute, varyingProperty, select, vec3, vec4, float, max, output } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { shared } from './materials.js';
 import { LAMP_LAYER, lampMaterial } from './lamplight.js';
@@ -135,6 +135,8 @@ function carMaterial(lit = true) {
   m.roughnessNode = select(glow.greaterThan(3.5), 0.85, select(glow.greaterThan(2.5), 0.06, 0.28));
   m.metalnessNode = select(glow.greaterThan(3.5), 0, select(glow.greaterThan(2.5), 0.9, 0.5));
   m.emissiveNode = select(isLamp, lamp.mul(lit ? shared.uNight.mul(select(glow.greaterThan(1.5), 2.0, 3.6)).add(0.15) : float(0.15)), vec3(0));
+  // (the windows are marked in alpha for the reflection pass, like those of the buildings)
+  m.outputNode = vec4(output.rgb, select(glow.greaterThan(2.5).and(glow.lessThan(3.5)), 0.1, 1));
   return m;
 }
 

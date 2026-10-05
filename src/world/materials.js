@@ -275,6 +275,8 @@ function facadeMaterial(tex) {
   m.metalnessNode = pMetal;
   m.emissiveNode = pEmissive;
   m.normalNode = transformNormalToView(pNormal);
+  // (the panes are marked in alpha for the reflection pass)
+  m.outputNode = vec4(output.rgb, pPane.mul(-0.95).add(1));
   return m;
 }
 
