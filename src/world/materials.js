@@ -8,7 +8,7 @@
 //   aBldg    x: building height (m), y: category + 8 * texture layer, z: kind (KIND), w: bay width (m, 0 = no windows)
 import * as THREE from 'three/webgpu';
 import {
-  Fn, If, uniform, renderGroup, uniformArray, texture, attribute, property, float, int, vec2, vec3, vec4, select, mix, step, smoothstep, floor, fract, abs, max, min,
+  Fn, If, uniform, renderGroup, sqrt, uniformArray, texture, attribute, property, float, int, vec2, vec3, vec4, select, mix, step, smoothstep, floor, fract, abs, max, min,
   dot, cross, normalize, length, reflect, pow, exp, sin, clamp, fwidth, distance, positionWorld, normalWorldGeometry, cameraPosition, transformNormalToView,
   materialColor, output,
 } from 'three/tsl';
@@ -38,6 +38,32 @@ export const shared = {
   uPhotoRange: su(new THREE.Vector2(140, 420)), uPhotoMix: su(1),
   // the mirror picture of the world in the water (mirror.js), and the matrix from a world point to its place in it
   uMirror: texture(blank()), uMirrorMatrix: su(new THREE.Matrix4()), uMirrorOn: su(0),
+  // what the water needs to mirror the clouds (clouds.js): their weather map and where it is, how much of the sky
+  // they cover, the height of their base, where the scene sits on the globe, and the area they are kept to
+  uCloudMap: texture(blank()), uCloudOffset: su(new THREE.Vector2()), uCloudCover: su(0), uCloudBase: su(450), uCloudsOn: su(0),
+  uWorldToECEF: su(new THREE.Matrix4()), uCloudRect: su(new THREE.Vector4()), uCloudFade: su(500),
+};
+
+// Where a point of the globe lies in the clouds' weather map (a cube laid round the sphere, as clouds.js maps it).
+const cloudMapUv = (position) => {
+  const n = normalize(position).toVar(), f = abs(n).toVar(), c = n.div(max(f.x, max(f.y, f.z))).toVar();
+  const m = select(f.y.greaterThan(f.x).and(f.y.greaterThan(f.z)), select(c.y.greaterThan(0), vec2(n.x.negate(), n.z), n.xz),
+    select(f.x.greaterThan(f.y).and(f.x.greaterThan(f.z)), select(c.x.greaterThan(0), n.yz, vec2(n.y.negate(), n.z)), select(c.z.greaterThan(0), n.xy, vec2(n.x, n.y.negate())))).toVar();
+  const m2 = m.mul(m).toVar(), q = dot(m2, vec2(-2, 2)).sub(3).toVar();
+  const x = sqrt(max(m2.x.sub(m2.y).add(1.5).sub(sqrt(max(m2.x.mul(-24).add(q.mul(q)), 0)).mul(0.5)), 0)).mul(select(m.x.greaterThan(0), 1, -1)).toVar();
+  return vec2(x, sqrt(float(6).div(x.mul(x).oneMinus().add(2))).mul(m.y)).mul(0.5).add(0.5);
+};
+// How much cloud a ray from p towards dir (upwards) meets: 0 clear sky .. 1 cloud. The same weather map and
+// cover as the cloud pass, without its fine shapes: the clouds are where they are in the sky, a little softer.
+const cloudAbove = (p, dir) => {
+  const { uCloudMap, uCloudOffset, uCloudCover, uCloudBase, uCloudsOn, uWorldToECEF, uCloudRect, uCloudFade } = shared;
+  const at = p.add(dir.mul(uCloudBase.add(320).sub(p.y).div(max(dir.y, 0.03)))).toVar();
+  const weather = uCloudMap.sample(cloudMapUv(uWorldToECEF.mul(vec4(at, 1)).xyz).mul(100).add(uCloudOffset)).level(0).rg.toVar();
+  const beyond = max(uCloudRect.xy.sub(at.xz), at.xz.sub(uCloudRect.zw));
+  weather.mulAssign(smoothstep(0, uCloudFade, max(beyond.x, beyond.y)).oneMinus());
+  // (the cloud pass wears the weather map down with its shape noise: only the thicker parts are cloud)
+  const edge = uCloudCover.mul(-1.25).add(1);
+  return smoothstep(edge, edge.add(0.22), max(weather.r, weather.g)).mul(smoothstep(0.03, 0.14, dir.y)).mul(uCloudsOn);
 };
 
 // ---------------------------------------------------------------- noise
@@ -375,6 +401,9 @@ function groundMaterial(tex, { fixedLayer = -1, vertexColors = false, ...params 
         const wv = normalize(positionWorld.sub(cameraPosition)).toVar(), wr = reflect(wv, pWaveN);
         const fresnel = pow(max(dot(wv.negate(), pWaveN), 0).oneMinus(), 4).mul(0.95).add(0.05);
         const seen = mix(vec3(0.8, 0.86, 0.92), vec3(0.3, 0.48, 0.74), pow(clamp(wr.y.abs(), 0, 1), 0.5)).mul(uDark.oneMinus().mul(0.97).add(0.03)).mul(0.9).toVar();
+        // the clouds in it: white where the sun is on them, grey towards the night
+        const cloud = cloudAbove(positionWorld, vec3(wr.x, wr.y.abs(), wr.z)).toVar();
+        seen.assign(mix(seen, vec3(0.96, 0.97, 0.98).mul(uDark.oneMinus().mul(0.95).add(0.05)), cloud.mul(0.9)));
         const thing = float(0).toVar();
         If(uMirrorOn.greaterThan(0.5), () => {
           // the city in the mirror picture (mirror.js), shifted by the ripples and drawn out lengthwise
@@ -388,7 +417,7 @@ function groundMaterial(tex, { fixedLayer = -1, vertexColors = false, ...params 
           seen.assign(mix(seen, mirrored.rgb.mul(vec3(0.88, 0.93, 0.95)), thing));
         });
         // (the city is wanted in the water from above as well: more of it than Fresnel would give)
-        lit.rgb.assign(mix(lit.rgb, seen, max(fresnel, thing.mul(0.42))));
+        lit.rgb.assign(mix(lit.rgb, seen, max(fresnel, max(thing.mul(0.42), cloud.mul(0.3).mul(thing.oneMinus())))));
       });
       // Without a mirror picture, alpha 0 leaves the water to the reflections found on the screen (reflections.js).
       return vec4(lit.rgb, pWater.mul(uMirrorOn.oneMinus()).oneMinus());

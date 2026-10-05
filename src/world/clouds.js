@@ -9,6 +9,7 @@ import {
   Fn, If, Loop, Break, Continue, uniform, texture, texture3D, float, int, vec2, vec3, vec4, mix, min, max, clamp, dot, normalize, length, pow, exp,
   sqrt, log2, abs, sign, select, smoothstep, uv, screenCoordinate, getViewPosition,
 } from 'three/tsl';
+import { shared } from './materials.js';
 import { getAtmosphereContext, getSplitScalarIlluminance, getSplitIlluminance, getIndirectLuminanceToPoint } from '@takram/three-atmosphere/webgpu';
 
 const ASSETS = 'assets/takram'; // cloud shape and weather textures and blue noise, as shipped with the packages
@@ -137,11 +138,15 @@ export class Clouds extends THREE.TempNode {
 
   // dt: seconds; focus: the point looked at; sun: the direction to the sun (world).
   update(dt, focus, sun) {
-    this.on.value = this.enabled ? 1 : 0;
+    this.on.value = shared.uCloudsOn.value = this.enabled ? 1 : 0;
     if (!this.enabled) return;
     this.setLayers();
     this.weatherOffset.value.addScaledVector(this.velocity, dt);
     this.sunWorld.value.copy(sun);
+    // what the water needs to mirror the clouds (materials.js)
+    shared.uCloudMap.value = this.weather.value; shared.uCloudOffset.value.copy(this.weatherOffset.value);
+    shared.uCloudCover.value = this.coverage.value; shared.uCloudBase.value = this.base;
+    shared.uWorldToECEF.value.copy(this.worldToECEF.value); shared.uCloudRect.value.copy(this.cityRect.value); shared.uCloudFade.value = this.cityFade.value;
     _x.crossVectors(Math.abs(sun.y) > 0.99 ? _v.set(1, 0, 0) : _v.set(0, 1, 0), sun).normalize();
     _y.crossVectors(sun, _x).normalize();
     // (the map moves a whole texel at a time)
