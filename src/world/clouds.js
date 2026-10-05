@@ -43,6 +43,13 @@ const tiled = (url) => new THREE.TextureLoader().load(url, (t) => {
   t.minFilter = THREE.LinearMipMapLinearFilter; t.magFilter = THREE.LinearFilter; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.NoColorSpace; t.needsUpdate = true;
 });
 
+// Blue noise that is blue in time as well (128 x 128, 64 frames): for whatever needs random numbers per pixel.
+export function blueNoise() {
+  const t = volume(`${ASSETS}/stbn.bin`, [128, 128, 64]);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  return t;
+}
+
 const remapClamped = (x, a, b) => clamp(x.sub(a).div(b.sub(a)), 0, 1);
 const _quad = new THREE.QuadMesh(), _size = new THREE.Vector2(), _v2 = new THREE.Vector2(), _v = new THREE.Vector3(), _x = new THREE.Vector3(), _y = new THREE.Vector3();
 let _state;
@@ -52,7 +59,7 @@ export class Clouds extends THREE.TempNode {
 
   // depth: the texture node of the scene's depth; atmosphere: the library's context; worldToECEF: where the scene sits on the globe;
   // bounds: { minX, maxX, minZ, maxZ } of the area, to which the clouds can be kept.
-  constructor(camera, depth, atmosphere, worldToECEF, bounds) {
+  constructor(camera, depth, atmosphere, worldToECEF, bounds, stbn) {
     super('vec4');
     this.bottom = float(atmosphere.parameters.bottomRadius); // (metres)
     this.altitude = atmosphere.altitudeCorrectionECEF;
@@ -84,8 +91,6 @@ export class Clouds extends THREE.TempNode {
     this.turbulence = texture(tiled(`${ASSETS}/turbulence.png`));
     this.shape = texture3D(volume(`${ASSETS}/shape.bin`, [128, 128, 128]));
     this.detail = texture3D(volume(`${ASSETS}/shape_detail.bin`, [32, 32, 32]));
-    const stbn = volume(`${ASSETS}/stbn.bin`, [128, 128, 64]);
-    stbn.minFilter = stbn.magFilter = THREE.NearestFilter;
     this.stbn = texture3D(stbn);
     this.weatherOffset = uniform(new THREE.Vector2());
 

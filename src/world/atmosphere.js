@@ -7,9 +7,9 @@
 import * as THREE from 'three/webgpu';
 import { pass, context, uniform, vec2, vec3, vec4, Fn, If, mix, uv, positionGeometry, rtt, float, fract, sin, dot, normalize, length, screenCoordinate } from 'three/tsl';
 import { bloomOver } from './bloom.js';
-import { ao as gtao } from 'three/addons/tsl/display/GTAONode.js';
+import { occlusion } from './occlusion.js';
 import { windowReflections } from './reflections.js';
-import { Clouds } from './clouds.js';
+import { Clouds, blueNoise } from './clouds.js';
 import { getSunDirectionECEF, getMoonDirectionECEF } from '@takram/three-atmosphere';
 import { AtmosphereContext, getAtmosphereContext, getIndirectLuminance, getIndirectLuminanceToPoint, SunNode, MoonNode } from '@takram/three-atmosphere/webgpu';
 import { depthToViewZ, screenToPositionView, projectionMatrix, inverseProjectionMatrix, inverseViewMatrix } from '@takram/three-geospatial/webgpu';
@@ -95,7 +95,7 @@ class AirNode extends THREE.TempNode {
 }
 
 // ambient occlusion: the reach in metres, and how dark
-const AO = { radius: 7, scale: 1, thickness: 1, falloff: 1, samples: 16, colour: [0.02, 0.02, 0.03] };
+const AO = { radius: 7, falloff: 1, intensity: 2.6, color: [0.02, 0.02, 0.03] };
 
 const ORIGIN = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
 
@@ -141,14 +141,10 @@ export class Atmosphere {
     const reflected = rtt(reflections.node);
     const seen = this.reflectOn.greaterThan(0.5).select(reflected.rgb, colour.rgb);
     // ambient occlusion: contact shading between buildings and the ground
-    const ao = this.ao = gtao(depth, null, camera);
-    ao.resolutionScale = 0.5;
-    ao.radius.value = AO.radius; ao.scale.value = AO.scale; ao.thickness.value = AO.thickness; ao.distanceFallOff.value = AO.falloff; ao.samples.value = AO.samples;
-    this.aoOn = uniform(1);
-    const shade = ao.getTextureNode().r.oneMinus().mul(this.aoOn).oneMinus();
-    const shaded = seen.mul(mix(vec3(AO.colour[0], AO.colour[1], AO.colour[2]), vec3(1), shade));
+    const stbn = blueNoise();
+    const shaded = (this.aoNode = occlusion(seen, depth, camera, stbn, AO)).rgb;
     // volumetric clouds: drawn into a picture of their own, which the air lays over the scene
-    const clouds = this.clouds = new Clouds(camera, depth, atmosphere, this.worldToECEF, bounds);
+    const clouds = this.clouds = new Clouds(camera, depth, atmosphere, this.worldToECEF, bounds, stbn);
     const air = this.air = new AirNode(vec4(shaded.mul(units), 1), depth, clouds);
     clouds.hazeScale = air.hazeScale; clouds.skyScale = air.skyScale;
     const lit = rtt(air.rgb.div(units)); // (once for the bloom and for the picture)
@@ -177,8 +173,8 @@ export class Atmosphere {
 
   get reflect() { return this.reflectOn.value > 0.5; }
   set reflect(v) { this.reflectOn.value = v ? 1 : 0; }
-  get occlusion() { return this.aoOn.value > 0.5; }
-  set occlusion(v) { this.aoOn.value = v ? 1 : 0; }
+  get occlusion() { return this.aoNode.on.value > 0.5; }
+  set occlusion(v) { this.aoNode.on.value = v ? 1 : 0; }
 
   get cloudsOn() { return this.clouds.enabled; } // (volumetric clouds are heavy: off until asked for)
   set cloudsOn(v) { this.clouds.enabled = v; }
