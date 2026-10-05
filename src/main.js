@@ -43,6 +43,10 @@ const USAGE = {
 // ---------------------------------------------------------------- renderer, scene, camera
 const renderer = new THREE.WebGPURenderer({ antialias: true, powerPreference: 'high-performance' });
 await renderer.init();
+// three keeps the matrices of a small InstancedMesh in a uniform array that is named after the mesh and sized to
+// its count: a shader and a pipeline of its own for every one of the hundreds here. As vertex attributes (which
+// three uses for the large ones) all the meshes of a kind share one.
+renderer.backend.capabilities.getUniformBufferLimit = () => 0;
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
