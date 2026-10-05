@@ -40,9 +40,6 @@ export class Environment {
     this.envSky.userData.uSunDir.value.copy(this.sunDir);
     this.envScene.add(this.envSky);
     this.bakeEnvironment();
-    // (pipelines are compiled in the background: the first bake may come out black, so it is done again once the
-    // sky and the blur passes have theirs)
-    this.rebake = [0.3, 1.5, 4];
 
     this.hemi = new THREE.HemisphereLight(0xfff4e6, 0x8a8172);
     scene.add(this.hemi);
@@ -64,10 +61,9 @@ export class Environment {
   bakeEnvironment() {
     this.baked = this.dark;
     this.envSky.userData.uNight.value = this.baked;
-    const old = this.envTarget;
-    this.envTarget = this.pmrem.fromScene(this.envScene, 0, 0.1, 10);
+    // (into the same texture every time: a new one would have every shader worked out again)
+    this.envTarget = this.pmrem.fromScene(this.envScene, 0, 0.1, 10, { renderTarget: this.envTarget ?? null });
     this.scene.environment = this.envTarget.texture;
-    old?.dispose();
   }
 
   // sun, moon: unit vectors towards them (world space). The light is the sun by day — dimmer and warmer as it
@@ -112,7 +108,6 @@ export class Environment {
 
   update(dt) {
     this.time += dt;
-    if (this.rebake.length && this.time > this.rebake[0]) { this.rebake.shift(); this.bakeEnvironment(); }
   }
 
   apply() {
