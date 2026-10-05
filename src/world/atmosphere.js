@@ -134,7 +134,6 @@ export class Atmosphere {
     const scenePass = this.scenePass = pass(scene, camera, { samples: 0 });
     const colour = scenePass.getTextureNode('output'), depth = scenePass.getTextureNode('depth');
     const units = this.units = uniform(UNITS);
-    this.skyOn = uniform(1);
     // window glass reflects what is on screen (first of all: it reads the panes marked in the alpha channel)
     const reflections = this.reflections = windowReflections(colour, depth, camera);
     this.reflectOn = uniform(1);

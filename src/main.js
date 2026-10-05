@@ -41,6 +41,11 @@ const USAGE = {
 };
 
 // ---------------------------------------------------------------- renderer, scene, camera
+// (the picture is drawn with WebGPU; a browser without it is told so rather than shown something half right)
+if (!navigator.gpu || !(await navigator.gpu.requestAdapter().catch(() => null))) {
+  loader.set(0, 'this needs WebGPU: a recent Chrome, Edge or Safari');
+  throw new Error('WebGPU is not available in this browser');
+}
 const renderer = new THREE.WebGPURenderer({ antialias: true, powerPreference: 'high-performance' });
 await renderer.init();
 // three keeps the matrices of a small InstancedMesh in a uniform array that is named after the mesh and sized to

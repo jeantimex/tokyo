@@ -103,8 +103,20 @@ Some of the problems that shaped the code:
 - **Streaming.** Tiles are 256 m squares meshed in Web Workers. The site loads what lies near the view by
   default; "whole city" in the settings loads everything.
 
-Rendering uses three.js (WebGL) with the pmndrs `postprocessing` composer: ambient occlusion (n8ao), the
-reflection pass, atmosphere and clouds, bloom and tone mapping.
+Rendering uses three.js on **WebGPU** (`WebGPURenderer`, with every material and pass written as TSL nodes): the
+scene, then one node pipeline of window reflections, ambient occlusion, atmosphere and clouds, bloom and tone
+mapping. It needs a browser with WebGPU (a recent Chrome, Edge or Safari).
+
+- **Ported from WebGL, picture for picture.** The first version ran on WebGL with the pmndrs `postprocessing`
+  composer, N8AO and takram's cloud effect. None of those have node versions, so the ambient occlusion
+  (`src/world/occlusion.js`), the mipmap-blur bloom (`src/world/bloom.js`) and the volumetric clouds with their
+  shadow map, haze and temporal gathering (`src/world/clouds.js`) were rewritten as nodes after them, and the
+  result compared against the WebGL picture view by view (`tools/compare.mjs`) until the two agreed to about one
+  level in 255.
+- **Keeping three's WebGPU renderer quick.** One facade material serves every tile (a tile's wall photos are its
+  mesh's own texture), instanced meshes pass their matrices as vertex attributes so that they share shaders
+  (58 pipelines instead of 678), the environment map is re-baked into the same texture, and shared values live
+  in one uniform group updated once per rendering rather than once per object.
 
 ## Running it locally
 
