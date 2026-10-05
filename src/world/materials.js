@@ -34,6 +34,8 @@ export const shared = {
   uSunDir: uniform(new THREE.Vector3(0, 1, 0)), uSunGlint: uniform(new THREE.Color(0, 0, 0)), uGlintOn: uniform(1),
   // wall photos: the distances (m) between which a facade goes from generated to photo, and how much photo at most
   uPhotoRange: uniform(new THREE.Vector2(140, 420)), uPhotoMix: uniform(1),
+  // the mirror picture of the world in the water (mirror.js), and the matrix from a world point to its place in it
+  uMirror: texture(blank()), uMirrorMatrix: uniform(new THREE.Matrix4()), uMirrorOn: uniform(0),
 };
 
 // ---------------------------------------------------------------- noise
@@ -357,15 +359,34 @@ function groundMaterial(tex, { fixedLayer = -1, vertexColors = false, ...params 
     // What water shows is what it mirrors, by Fresnel's share: hardly anything looking straight down (the dark
     // water itself), nearly everything at a glancing angle. Every ripple turns its sides to different parts of
     // the sky, which is what draws the ripples: light streaks and dark.
+    const { uMirror, uMirrorMatrix, uMirrorOn } = shared;
     m.outputNode = Fn(() => {
       const lit = vec4(output).toVar();
+      // (taken outside the branch: derivatives)
+      const mc = uMirrorMatrix.mul(vec4(positionWorld, 1)).toVar();
+      const near = clamp(float(70).div(distance(cameraPosition, positionWorld)), 0.12, 1.6).toVar();
+      const muv = mc.xy.div(mc.w).mul(0.5).add(0.5).add(pWaveN.xz.mul(vec2(0.5, 0.9)).mul(near)).toVar();
       If(pWater.greaterThan(0.5), () => {
         const wv = normalize(positionWorld.sub(cameraPosition)).toVar(), wr = reflect(wv, pWaveN);
         const fresnel = pow(max(dot(wv.negate(), pWaveN), 0).oneMinus(), 4).mul(0.95).add(0.05);
-        const seen = mix(vec3(0.8, 0.86, 0.92), vec3(0.3, 0.48, 0.74), pow(clamp(wr.y.abs(), 0, 1), 0.5)).mul(uDark.oneMinus().mul(0.97).add(0.03)).mul(0.9);
-        lit.rgb.assign(mix(lit.rgb, seen, fresnel));
+        const seen = mix(vec3(0.8, 0.86, 0.92), vec3(0.3, 0.48, 0.74), pow(clamp(wr.y.abs(), 0, 1), 0.5)).mul(uDark.oneMinus().mul(0.97).add(0.03)).mul(0.9).toVar();
+        const thing = float(0).toVar();
+        If(uMirrorOn.greaterThan(0.5), () => {
+          // the city in the mirror picture (mirror.js), shifted by the ripples and drawn out lengthwise
+          const mirrored = vec4(0).toVar();
+          for (let i = -1; i <= 1; i++) {
+            const q = clamp(muv.add(vec2(0, near.mul(i * 0.004))), 0.001, 0.999);
+            mirrored.addAssign(uMirror.sample(vec2(q.x, q.y.oneMinus())));
+          }
+          mirrored.divAssign(3);
+          thing.assign(smoothstep(0, 0.3, mirrored.a.add(mirrored.r).add(mirrored.g).add(mirrored.b)));
+          seen.assign(mix(seen, mirrored.rgb.mul(vec3(0.88, 0.93, 0.95)), thing));
+        });
+        // (the city is wanted in the water from above as well: more of it than Fresnel would give)
+        lit.rgb.assign(mix(lit.rgb, seen, max(fresnel, thing.mul(0.42))));
       });
-      return lit;
+      // Without a mirror picture, alpha 0 leaves the water to the reflections found on the screen (reflections.js).
+      return vec4(lit.rgb, pWater.mul(uMirrorOn.oneMinus()).oneMinus());
     })();
   }
   return m;

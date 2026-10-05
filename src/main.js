@@ -106,7 +106,7 @@ const birds = createBirds();
 if (params.get('birds') != null) birds.geometry.instanceCount = Math.min(MAX_BIRDS, Number(params.get('birds')) || 0);
 scene.add(birds);
 const lampLight = new LampLight(renderer);
-const waterMirror = new WaterMirror();
+const waterMirror = new WaterMirror(renderer);
 // post-processing: ambient occlusion, sky, aerial perspective, volumetric clouds, bloom, tone mapping
 const atmosphere = new Atmosphere(renderer, scene, camera, manifest.origin, manifest.bounds);
 if (params.get('reflect') === '0') atmosphere.reflect = false;
