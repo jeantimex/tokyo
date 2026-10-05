@@ -1,6 +1,6 @@
 // Railways: track bed, rails, viaducts with piers, retaining walls and overhead-line masts, built
 // once for the whole area from rails.json (height profile from tools/pipeline/rails.mjs).
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { Trains } from './trains.js';
 
 const STEP = 3;            // metres between cross-sections

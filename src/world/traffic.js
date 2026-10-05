@@ -9,7 +9,7 @@
 //     together); without lights, a side street gives way to the bigger road and slows right down first (止まれ)
 //   - where lanes merge, vehicles queue instead of entering side by side
 //   - never enter a junction without room on the far side
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { shared } from './materials.js';
 import { LAMP_LAYER, lampMaterial } from './lamplight.js';

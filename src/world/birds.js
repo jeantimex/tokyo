@@ -3,7 +3,7 @@
 // if the view has moved on meanwhile). One instanced mesh; where a flock's tree is and how far the flock has
 // settled in it is kept per flock in a small texture, everything else comes out of the vertex shader from the
 // time and a few random numbers per bird, so a thousand birds cost the CPU next to nothing.
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { shared } from './materials.js';
 
 export const MAX_BIRDS = 2000;
@@ -41,73 +41,11 @@ export function createBirds() {
   const data = new Float32Array(FLOCKS * 2 * 4);
   const flockTex = new THREE.DataTexture(data, FLOCKS, 2, THREE.RGBAFormat, THREE.FloatType);
   flockTex.minFilter = flockTex.magFilter = THREE.NearestFilter;
-  const material = new THREE.ShaderMaterial({
-    side: THREE.DoubleSide,
-    uniforms: { uTime: shared.uTime, uDark: shared.uDark, uFlocks: { value: flockTex } },
-    vertexShader: /* glsl */ `
-      #define PIGEONS 1.0 // share of the flocks that are white pigeons (the rest would be black crows)
-      attribute float aWing;
-      attribute vec4 aSeed;
-      uniform float uTime;
-      uniform sampler2D uFlocks;
-      varying float vShade;
-      varying float vCrow;
-      float hash(float n) { return fract(sin(n * 127.1) * 43758.5453); }
-      // how much of the bird is still in the air (1), with the flock settled by 'perch': one bird after another
-      float aloft(float perch) {
-        float b = clamp(perch * 1.4 - 0.4 * aSeed.w, 0.0, 1.0);
-        return 1.0 - b * b * (3.0 - 2.0 * b);
-      }
-      // where the bird is at time t
-      vec3 place(float t, vec4 flock, float perch) {
-        float f = aSeed.x, air = aloft(perch);
-        // the flock: a slow, never-repeating loop above its tree, at a height of its own
-        vec2 reach = 45.0 + 170.0 * vec2(hash(f + 1.0), hash(f + 5.0));
-        vec3 c = vec3(
-          reach.x * sin(t * (0.05 + 0.06 * hash(f + 8.0)) + 6.28 * hash(f + 2.0)),
-          22.0 + 230.0 * pow(hash(f + 3.0), 2.0) + 14.0 * sin(t * 0.05 + 6.28 * hash(f + 4.0)),
-          reach.y * sin(t * (0.05 + 0.06 * hash(f + 10.0)) + 6.28 * hash(f + 6.0)));
-        // the bird: round the flock on its own circle, rising and falling a little
-        float radius = 8.0 + 55.0 * aSeed.y, turn = (0.5 + aSeed.z) * 4.5 / radius * (hash(f + 7.0) < 0.5 ? -1.0 : 1.0);
-        float a = t * turn + 6.28 * aSeed.w;
-        vec3 own = vec3(cos(a) * radius, 9.0 * sin(t * 0.21 + 6.28 * aSeed.z) + 50.0 * (aSeed.w - 0.5), sin(a) * radius * 0.8);
-        own.y = max(own.y, 4.0 - c.y);
-        // settled, it sits somewhere in the crown
-        vec3 twig = (vec3(aSeed.y, aSeed.z, aSeed.w) - 0.5) * vec3(3.0, 2.0, 3.0);
-        return flock.xyz + mix(twig, c + own, air);
-      }
-      void main() {
-        float u = (aSeed.x + 0.5) / ${FLOCKS}.0;
-        vec4 flock = texture2D(uFlocks, vec2(u, 0.25));
-        float rate = texture2D(uFlocks, vec2(u, 0.75)).x;
-        vec3 p = place(uTime, flock, flock.w), ahead = place(uTime + 0.25, flock, clamp(flock.w + rate * 0.25, 0.0, 1.0));
-        vec3 fwd = normalize(ahead - p + vec3(0.0, 0.0, 1e-4)), right = normalize(cross(vec3(0.0, 1.0, 0.0), fwd)), up = cross(fwd, right);
-        // wings: beat for a while, then glide with the wings held a little up
-        float beat = smoothstep(-0.2, 0.3, sin(uTime * 0.35 + 6.28 * aSeed.y));
-        // a flock is of one kind: pigeons (the larger share: white, smaller, quick wings) or crows (black, slow wings)
-        float crow = step(PIGEONS, hash(aSeed.x + 9.0));
-        float lift = mix(0.18, sin(uTime * mix(8.0, 4.5, crow) * (0.85 + 0.3 * aSeed.z) + 6.28 * aSeed.w), beat) * 0.55;
-        // (a bird in the tree is not seen: it shrinks away among the leaves as it arrives)
-        vec3 local = position * mix(0.7, 1.0, crow) * smoothstep(0.0, 0.05, aloft(flock.w));
-        vCrow = crow;
-        local.y += abs(local.x) * lift * aWing;
-        local.x *= 1.0 - 0.22 * abs(lift) * aWing;
-        vec3 world = p + right * local.x + up * local.y + fwd * local.z;
-        vShade = 0.75 + 0.25 * aWing;
-        gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
-      }`,
-    fragmentShader: /* glsl */ `
-      uniform float uDark;
-      varying float vShade;
-      varying float vCrow;
-      void main() { gl_FragColor = vec4(mix(vec3(0.82, 0.82, 0.84), vec3(0.03, 0.03, 0.035), vCrow) * vShade * mix(1.0, 0.5, uDark), 1.0); } // (still white against the night sky)`,
-  });
+  const material = new THREE.MeshBasicNodeMaterial({ side: THREE.DoubleSide }); // (stage C of the WebGPU port: the flight)
   const mesh = new THREE.Mesh(birdGeometry(), material);
   mesh.frustumCulled = false; // (they are placed in the shader)
   mesh.name = 'birds';
-  // shadows: the shadow pass must place the birds as the picture does, so it gets the same vertex shader
-  mesh.castShadow = true;
-  mesh.customDepthMaterial = new THREE.ShaderMaterial({ side: THREE.DoubleSide, uniforms: material.uniforms, vertexShader: material.vertexShader, fragmentShader: 'void main() { gl_FragColor = vec4(1.0); }' });
+  mesh.visible = false;
   mesh.geometry.instanceCount = 100;
 
   // ---- the flocks: which tree, and flying / coming down / in the tree / leaving it

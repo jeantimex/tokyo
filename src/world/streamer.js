@@ -1,6 +1,6 @@
 // Keeps the tiles within `radius` of a focus point loaded, nearest first, and drops the ones
 // that fall beyond radius + hysteresis. Meshing happens in a small pool of workers.
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { tileKey } from '../shared/geo.js';
 import { sampleGrid } from '../shared/terrain.js';
 import { makeSurface, makeCover } from '../shared/decks.js';

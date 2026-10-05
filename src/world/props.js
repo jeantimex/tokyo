@@ -1,7 +1,8 @@
 // Street furniture and vegetation: the models (built procedurally once) and the per-tile instancing.
 // Local frame of every model: +y up, origin on the ground; `rot` from the tile turns local +z to the
 // direction given by the compiler (see tools/pipeline/landscape.mjs and markings.mjs).
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
+import { attribute, float, vec3, uv, mix, step, select } from 'three/tsl';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Tree } from '@dgreenheck/ez-tree';
 import { PROP, DECAL } from '../shared/tileformat.js';
@@ -294,24 +295,15 @@ function decalTexture() {
 
 // Lenses of the traffic signals: unlit discs that cycle green -> yellow -> red from uTime.
 function lensMaterial() {
-  return new THREE.ShaderMaterial({
-    uniforms: { uTime: { value: 0 } },
-    vertexShader: /* glsl */ `
-      attribute vec2 aLens; // x: 0 green, 1 yellow, 2 red; y: phase 0 or 1 (crossing directions alternate)
-      varying vec2 vLens; varying vec2 vUv;
-      void main() { vLens = aLens; vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0); }`,
-    fragmentShader: /* glsl */ `
-      uniform float uTime; varying vec2 vLens; varying vec2 vUv;
-      void main() {
-        float t = mod(uTime + vLens.y * 32.0, 64.0);            // 0-27 green, 27-30 yellow, 30-64 red
-        float state = t < 27.0 ? 0.0 : t < 30.0 ? 1.0 : 2.0;
-        float on = 1.0 - step(0.5, abs(state - vLens.x));
-        vec3 c = vLens.x < 0.5 ? vec3(0.0, 1.0, 0.62) : vLens.x < 1.5 ? vec3(1.0, 0.7, 0.0) : vec3(1.0, 0.08, 0.05);
-        float d = length(vUv - 0.5) * 2.0;
-        if (d > 1.0) discard;
-        gl_FragColor = vec4(c * mix(0.06, 2.6, on) * (1.0 - 0.35 * d), 1.0);
-      }`,
-  });
+  const m = new THREE.MeshBasicNodeMaterial();
+  const lens = attribute('aLens', 'vec2'); // x: 0 green, 1 yellow, 2 red; y: phase 0 or 1 (crossing directions alternate)
+  const t = shared.uTime.add(lens.y.mul(32)).mod(64); // 0-27 green, 27-30 yellow, 30-64 red
+  const state = select(t.lessThan(27), 0, select(t.lessThan(30), 1, 2));
+  const on = float(1).sub(step(0.5, state.sub(lens.x).abs()));
+  const c = select(lens.x.lessThan(0.5), vec3(0, 1, 0.62), select(lens.x.lessThan(1.5), vec3(1, 0.7, 0), vec3(1, 0.08, 0.05)));
+  const d = uv().sub(0.5).length().mul(2);
+  m.colorNode = c.mul(mix(0.06, 2.6, on)).mul(float(1).sub(d.mul(0.35)));
+  return m; // (the lens is a disc of its own: nothing to cut away)
 }
 
 // ---------------------------------------------------------------- trees
@@ -443,7 +435,6 @@ export class Props {
     this.time += dt;
     const night = shared.uNight.value;
     shared.uTime.value = this.time;
-    this.mats.lens.uniforms.uTime.value = this.time;
     // the light straight under a lamp, in its colour: sodium-warm on the avenues, white on the back streets
     const k = night * this.streetLights;
     this.mats.pool.color.setRGB(1.9 * k, 1.5 * k, 0.95 * k);

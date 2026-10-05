@@ -4,7 +4,7 @@
 // marked pixel the mirrored view ray is marched through the depth buffer; where it meets something that
 // is on screen, the pane shows it. A ray that leaves the screen or finds nothing keeps what the pane had:
 // the reflection of the sky from the environment map.
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { Effect, EffectAttribute } from 'postprocessing';
 import { shared } from './materials.js';
 

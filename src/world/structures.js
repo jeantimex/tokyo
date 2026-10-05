@@ -1,6 +1,6 @@
 // Footbridges, station platforms and canopies (structures.json from tools/pipeline/extras.mjs), built once
 // for the whole area.
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import earcut from 'earcut';
 import { Soup, sections } from './rails.js';
 

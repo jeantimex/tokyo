@@ -4,7 +4,7 @@
 // Albedo layers are stored as *detail*: each channel is divided by the layer's mean, so a sample
 // averages 1.0 (stored halved to fit 8 bits). The shader multiplies it by the surface's own colour, which
 // lets one tile texture serve white, beige and brown buildings alike.
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 
 const SIZE = 1024;
 
@@ -58,7 +58,7 @@ function arrayTexture(layers, renderer) {
   t.minFilter = THREE.LinearMipmapLinearFilter;
   t.magFilter = THREE.LinearFilter;
   t.generateMipmaps = true;
-  t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  t.anisotropy = Math.min(8, renderer.getMaxAnisotropy());
   t.needsUpdate = true;
   return t;
 }

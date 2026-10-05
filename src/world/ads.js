@@ -3,7 +3,7 @@
 // anime-style face, a lucky cat, Mount Fuji, a sports car, a robot, a bowl of ramen, a game pad ... — with
 // sign words. No real character, brand or logo is used. A screen cycles through the posters with a wipe,
 // seen through an LED grid. Everything glows at night; screens are bright all day.
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { shared } from './materials.js';
 
 const COLS = 8, ROWS = 4, SIZE = 512;

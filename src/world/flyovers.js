@@ -1,6 +1,6 @@
 // Elevated roads: the Shuto expressway, its ramps and ordinary road bridges. Built once for the whole
 // area from roads.json, whose points carry the road level (tools/pipeline/roadprofile.mjs).
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { Soup, sections } from './rails.js';
 
 const DECK_ABOVE = 2.0;   // road level this far above the ground gets a deck on piers; lower, a walled ramp

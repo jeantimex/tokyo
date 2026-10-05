@@ -1,6 +1,6 @@
 // Signboards (tools/pipeline/signs.mjs). Far away a sign is a coloured panel; when its tile comes near,
 // the names are drawn into a texture atlas for that tile. All of them glow at night.
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { shared } from './materials.js';
 import { Ads } from './ads.js';
 

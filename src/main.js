@@ -1,7 +1,7 @@
 // Procedural Tokyo client: streams the compiled city and renders it, under a free camera.
 //
 // URL parameters: ?area=tokyo  ?time=18.5 (Tokyo hour; default: now)  ?night=1  ?cam=x,z,distance,azimuthDeg,elevationDeg  ?radius=3000  ?traffic=0  ?ortho=0  ?clouds=0.25 (on, with that cover)  ?birds=150  ?cars=600
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { MapControls } from 'three/addons/controls/MapControls.js';
 import GUI from 'lil-gui';
 import { makeProjection } from './shared/geo.js';
@@ -20,9 +20,7 @@ import { Atmosphere } from './world/atmosphere.js';
 import { createBirds, MAX_BIRDS } from './world/birds.js';
 import { loadBackdrop } from './world/backdrop.js';
 import { WaterMirror } from './world/mirror.js';
-import { LampLight, installLampLight } from './world/lamplight.js';
-
-installLampLight(); // (before any material is compiled)
+import { LampLight } from './world/lamplight.js';
 
 const params = new URLSearchParams(location.search);
 const AREA = params.get('area') || 'tokyo'; // (the first of the city switch)
@@ -42,12 +40,13 @@ const USAGE = {
 };
 
 // ---------------------------------------------------------------- renderer, scene, camera
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGPURenderer({ antialias: true, powerPreference: 'high-performance' });
+await renderer.init();
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.shadowMap.enabled = true;
-renderer.info.autoReset = false; // the composer renders several passes; count the whole frame
+renderer.info.autoReset = false; // the pipeline renders several passes; count the whole frame
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
@@ -106,13 +105,10 @@ const birds = createBirds();
 if (params.get('birds') != null) birds.geometry.instanceCount = Math.min(MAX_BIRDS, Number(params.get('birds')) || 0);
 scene.add(birds);
 const lampLight = new LampLight(renderer);
-const waterMirror = new WaterMirror(renderer);
+const waterMirror = new WaterMirror();
 // post-processing: ambient occlusion, sky, aerial perspective, volumetric clouds, bloom, tone mapping
 const atmosphere = new Atmosphere(renderer, scene, camera, manifest.origin, manifest.bounds);
-env.sky.visible = false; // the atmosphere draws the sky (the environment map keeps its own)
-const ao = atmosphere.ao;
 if (params.get('reflect') === '0') atmosphere.reflect = false;
-if (Number(params.get('clouds')) > 0) { atmosphere.coverage = Number(params.get('clouds')); atmosphere.cloudsOn = true; }
 let orthoLoaded = false, orthoWanted = true; // (the photo fills in when the tiles arrive; the panel may have switched it off by then)
 if (params.get('ortho') !== '0') loadOrtho(`ortho/${AREA}`, proj, manifest.bounds, renderer).then((ok) => { orthoLoaded = ok; shared.uOrthoOn.value = ok && orthoWanted ? 1 : 0; });
 const railways = await buildRailways(`tiles/${AREA}/${manifest.rails}`, (x, z) => streamer.ground(x, z), streamer.cover);
@@ -136,7 +132,7 @@ let guiState, clockText;
 {
   // the compiled areas (tools/pipeline/compile.mjs keeps the list); another city is another page load
   const areas = await fetch('tiles/areas.json').then((r) => (r.ok ? r.json() : null)).catch(() => null) ?? [{ id: AREA, name: manifest.name }];
-  const trains = railways.userData.trains.group, AO = ao.configuration.intensity;
+  const trains = railways.userData.trains.group;
   const state = {
     city: AREA,
     get info() { return document.getElementById('hud').style.display !== 'none'; }, set info(v) { document.getElementById('hud').style.display = v ? '' : 'none'; },
@@ -145,7 +141,6 @@ let guiState, clockText;
     get trains() { return trains.visible; }, set trains(v) { trains.visible = v; },
     get photo() { return orthoWanted; }, set photo(v) { orthoWanted = v; shared.uOrthoOn.value = v && orthoLoaded ? 1 : 0; },
     get shadows() { return env.sun.castShadow; }, set shadows(v) { env.sun.castShadow = v; },
-    get occlusion() { return ao.configuration.intensity > 0; }, set occlusion(v) { ao.configuration.intensity = v ? AO : 0; },
     bloom: true,
     // the whole city at once, or only what lies within the view radius of the point looked at (fewer tiles: more frames)
     wholeCity: false, near: Number(params.get('radius')) || 900,
@@ -182,13 +177,6 @@ let guiState, clockText;
   gui.add(state, 'photo').name('aerial photo').listen();
   gui.add(birds.geometry, 'instanceCount', 0, MAX_BIRDS, 10).name('birds');
   gui.add(state, 'info').name('info panel');
-  const sky = gui.addFolder('Clouds');
-  sky.add(atmosphere, 'cloudsOn').name('clouds');
-  sky.add(atmosphere, 'coverage', 0, 1, 0.05);
-  sky.add(atmosphere, 'base', 200, 2000, 50).name('base altitude (m)');
-  sky.add(atmosphere, 'overCity').name('over the city only');
-  sky.add(atmosphere, 'quality', ['low', 'medium', 'high', 'ultra']);
-  sky.add(atmosphere.clouds.localWeatherVelocity, 'x', 0, 0.02, 0.0005).name('wind');
   const rooms = gui.addFolder('Night windows');
   rooms.add(shared.uWindowLife.value, 'x', 0, 1, 0.05).name('rooms that change');
   rooms.add(shared.uWindowLife.value, 'y', 0.2, 30, 0.1).name('pace');
@@ -204,7 +192,6 @@ let guiState, clockText;
   quality.add(atmosphere, 'reflect').name('window and water reflections');
   quality.add(shared.uGlintOn, 'value', 0, 1, 1).name('sun in the windows');
   quality.add(state, 'shadows');
-  quality.add(state, 'occlusion').name('ambient occlusion');
   quality.add(state, 'bloom');
 
   // The panel's settings are kept (in this browser) and are the same for every city: what is switched off in
@@ -334,7 +321,7 @@ function tick() {
   env.update(dt);
   env.follow(controls.target, camera);
   lampLight.update(scene, controls.target, camera.position, env.night);
-  atmosphere.bloom.intensity = guiState.bloom ? env.bloom * 3 : 0;
+  atmosphere.bloom.value = guiState.bloom ? env.bloom * 3 : 0;
   waterMirror.enabled = atmosphere.reflect;
   waterMirror.update(scene, camera, streamer.tiles, controls.target, [traffic.group.parent ? null : traffic.group]);
   atmosphere.render(dt);
@@ -356,4 +343,4 @@ function frame() { tick(); requestAnimationFrame(frame); }
 requestAnimationFrame(frame);
 
 // (for the console and for tools: tick() draws a frame by hand, clockTime sets the hour)
-window.__app = { scene, camera, controls, streamer, env, renderer, materials, ao, atmosphere, traffic, shared, tick, clockTime };
+window.__app = { scene, camera, controls, streamer, env, renderer, materials, atmosphere, traffic, shared, tick, clockTime };

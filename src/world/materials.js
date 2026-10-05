@@ -6,32 +6,31 @@
 //   aFacade  x: window column coordinate (integer = bay edge), y: height above the base (m),
 //            z: floor height (m), w: building seed in [0, 1)
 //   aBldg    x: building height (m), y: category + 8 * texture layer, z: kind (KIND), w: bay width (m, 0 = no windows)
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
+import { uniform, texture } from 'three/tsl';
 
+// (a texture node needs a texture from the start: one grey texel until the real one arrives)
+const blank = () => { const t = new THREE.DataTexture(new Uint8Array([128, 128, 128, 255]), 1, 1); t.needsUpdate = true; return t; };
+
+// Values shared by the materials, as node uniforms: set them through .value.
 export const shared = {
-  uNight: { value: 0 }, // 0 day .. 1 night: how far the lights are on
-  uDark: { value: 0 },  // 0 day .. 1 night: how dark it is
-  uTime: { value: 0 },  // seconds, for wind and signals
+  uNight: uniform(0), // 0 day .. 1 night: how far the lights are on
+  uDark: uniform(0),  // 0 day .. 1 night: how dark it is
+  uTime: uniform(0),  // seconds, for wind and signals
   // aerial photo over the area: texture, and its rectangle in world x/z as (minX, minZ, sizeX, sizeZ)
-  uOrtho: { value: null }, uOrthoRect: { value: new THREE.Vector4(0, 0, 1, 1) }, uOrthoOn: { value: 0 },
+  uOrtho: texture(blank()), uOrthoRect: uniform(new THREE.Vector4(0, 0, 1, 1)), uOrthoOn: uniform(0),
   // lit windows at night: the share of rooms whose light comes and goes, and how fast (1: every 1.5 to 5.5 minutes)
-  uWindowLife: { value: new THREE.Vector2(0.5, 4) },
+  uWindowLife: uniform(new THREE.Vector2(0.5, 4)),
   // how strongly the glass of tall buildings mirrors the lights of the city at night (0: off)
-  uCityGlass: { value: 1 },
+  uCityGlass: uniform(1),
   // how blue the lights of the city are at night (0: mostly warm, 1: a cool blue city)
-  uNightBlue: { value: 0.55 },
+  uNightBlue: uniform(0.55),
   // lamp light on the ground (src/world/lamplight.js): on at night, the light map, where it lies
-  uLampOn: { value: 0 }, uLampMap: { value: null }, uLampRect: { value: new THREE.Vector4(0, 0, 1, 0) },
-  // the city mirrored in the water (mirror.js): the picture, how a point of the world maps into it, and whether there is one
-  uMirror: { value: null }, uMirrorMatrix: { value: new THREE.Matrix4() }, uMirrorOn: { value: 0 },
-  // the clouds, for the water to mirror (set by atmosphere.js): the weather map the cloud pass draws them from, its
-  // drift, the cover, the height of the cloud base, the place of the world on the globe, and where clouds are kept to
-  uCloudMap: { value: null }, uCloudOffset: { value: new THREE.Vector2() }, uCloudCover: { value: 0 }, uCloudBase: { value: 450 }, uCloudsOn: { value: 0 },
-  uWorldToECEF: { value: new THREE.Matrix4() }, uCloudRect: { value: new THREE.Vector4() }, uCloudFade: { value: 500 },
+  uLampOn: uniform(0), uLampMap: texture(blank()), uLampRect: uniform(new THREE.Vector4(0, 0, 1, 0)),
   // the sun in the window glass: direction to the sun (world), and its colour times how much of it there is
-  uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSunGlint: { value: new THREE.Color(0, 0, 0) }, uGlintOn: { value: 1 },
+  uSunDir: uniform(new THREE.Vector3(0, 1, 0)), uSunGlint: uniform(new THREE.Color(0, 0, 0)), uGlintOn: uniform(1),
   // wall photos: the distances (m) between which a facade goes from generated to photo, and how much photo at most
-  uPhotoRange: { value: new THREE.Vector2(140, 420) }, uPhotoMix: { value: 1 },
+  uPhotoRange: uniform(new THREE.Vector2(140, 420)), uPhotoMix: uniform(1),
 };
 
 

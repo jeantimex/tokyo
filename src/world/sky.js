@@ -1,6 +1,6 @@
 // Sky dome: horizon/zenith gradient, sun, drifting procedural clouds, and a night sky with stars and
 // city glow. The same shader (sun disc off) is rendered into the environment map for reflections.
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 
 export const SKY = {
   zenith: new THREE.Color().setRGB(0.17, 0.33, 0.62),

@@ -1,7 +1,7 @@
 // Trains running on the railway lines. Each line's OSM ways are chained into paths (way direction =
 // running direction); one train per path loops through the area, leaving at one edge and re-entering
 // at the other.
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { beamTexture } from './traffic.js';
 import { LAMP_LAYER, lampMaterial } from './lamplight.js';
 

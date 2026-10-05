@@ -1,6 +1,6 @@
 // Aerial photo of the area (GSI seamlessphoto tiles fetched by tools/pipeline/fetch.mjs into
 // public/ortho/<area>/), stitched into one texture that the terrain material drapes over the open ground.
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { shared } from './materials.js';
 
 const MAX = 4096; // texture pixels along the longer side (about 0.8 m per pixel for Shibuya)
@@ -32,7 +32,7 @@ export async function loadOrtho(base, proj, bounds, renderer) {
   await Promise.all(jobs);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  texture.anisotropy = Math.min(8, renderer.getMaxAnisotropy());
   shared.uOrtho.value = texture;
   shared.uOrthoRect.value.set(bounds.minX, bounds.minZ, sizeX, sizeZ);
   shared.uOrthoOn.value = 1;

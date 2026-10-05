@@ -1,6 +1,5 @@
 // Sky, sun, image-based ambient light and the day/night blend. (No fog: the whole area is loaded and seen clearly.)
-import * as THREE from 'three';
-import { createSky, SKY } from './sky.js';
+import * as THREE from 'three/webgpu';
 import { shared } from './materials.js';
 
 const SHADOW_SIZE = 4096;
@@ -24,18 +23,6 @@ export class Environment {
     this.time = 0;
     this.sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 40), THREE.MathUtils.degToRad(205));
 
-    this.sky = createSky();
-    this.sky.material.uniforms.uSunDir.value.copy(this.sunDir);
-    scene.add(this.sky);
-
-    // Environment map: the same sky without the sun disc (the sun is the directional light).
-    this.pmrem = new THREE.PMREMGenerator(renderer);
-    this.envScene = new THREE.Scene();
-    this.envSky = createSky({ sunDisc: 0, ground: SKY.ground });
-    this.envSky.material.uniforms.uSunDir.value.copy(this.sunDir);
-    this.envScene.add(this.envSky);
-    this.bakeEnvironment();
-
     this.hemi = new THREE.HemisphereLight(0xfff4e6, 0x8a8172);
     scene.add(this.hemi);
 
@@ -50,15 +37,6 @@ export class Environment {
     scene.add(this.sun, this.sun.target);
 
     this.apply();
-  }
-
-  // Renders the environment map for the sky as dark as it now is (again whenever that has changed a little).
-  bakeEnvironment() {
-    this.baked = this.dark;
-    this.envSky.material.uniforms.uNight.value = this.baked;
-    const old = this.scene.environment;
-    this.scene.environment = this.pmrem.fromScene(this.envScene, 0, 0.1, 10).texture;
-    old?.dispose();
   }
 
   // sun, moon: unit vectors towards them (world space). The light is the sun by day — dimmer and warmer as it
@@ -80,12 +58,10 @@ export class Environment {
     shared.uSunDir.value.copy(sun);
     shared.uSunGlint.value.copy(DAY.sunColor).lerp(SUNSET, this.warmth).multiplyScalar(this.daylight * 3);
     this.apply();
-    if (Math.abs(this.dark - this.baked) > 0.04 || (this.dark !== this.baked && (this.dark === 0 || this.dark === 1))) this.bakeEnvironment();
   }
 
   // The sky follows the camera; the shadow frustum follows the focus, snapped to texels so shadows do not shimmer.
   follow(focus, camera) {
-    this.sky.position.copy(camera.position);
     // Shadow coverage grows with the viewing distance (in coarse steps, so it rarely changes).
     const want = THREE.MathUtils.clamp(camera.position.distanceTo(focus) * 1.1, 220, 1800);
     const extent = 220 * 1.3 ** Math.ceil(Math.log(want / 220) / Math.log(1.3));
@@ -96,7 +72,7 @@ export class Environment {
       c.updateProjectionMatrix();
       this.sun.shadow.normalBias = 0.25 + extent / 900;
     }
-    const texel = (2 * extent) / SHADOW_SIZE;
+    const texel = (2 * extent) / this.sun.shadow.mapSize.x;
     const fx = Math.round(focus.x / texel) * texel, fz = Math.round(focus.z / texel) * texel;
     this.sun.target.position.set(fx, focus.y, fz);
     this.sun.position.copy(this.sun.target.position).addScaledVector(this.sunDir, 2000);
@@ -104,12 +80,10 @@ export class Environment {
 
   update(dt) {
     this.time += dt;
-    this.sky.material.uniforms.uTime.value = this.time;
   }
 
   apply() {
     const t = this.dark, lerp = (a, b) => a + (b - a) * t;
-    this.sky.material.uniforms.uNight.value = t;
     this.hemi.intensity = lerp(DAY.hemi, NIGHT.hemi);
     this.sun.intensity = DAY.sun * this.daylight + NIGHT.sun * this.moonlight;
     this.sun.color.copy(DAY.sunColor).lerp(SUNSET, this.warmth).lerp(NIGHT.sunColor, this.moonlight);

@@ -1,8 +1,7 @@
 // The land around an area: coarse terrain (backdrop.bin, a height grid some tens of kilometres wide) under an
 // aerial photo — a coarse one of all of it and a sharper one of the land just beyond the last houses. It is
 // what stands on the horizon (Mt Fuji behind Fujinomiya) and has no buildings. High ground carries snow.
-import * as THREE from 'three';
-import { lampUniforms } from './lamplight.js';
+import * as THREE from 'three/webgpu';
 
 const MAX = 4096;          // photo texture pixels along a side
 const SINK = 40;           // metres the backdrop is sunk under the area itself, so the detailed ground covers it
@@ -20,7 +19,7 @@ async function photo(dir, proj, renderer, clip) {
   const { z, x0, x1, y0, y1 } = tiles;
   let [ax, az] = proj.project(tileLon(x0, z), tileLat(y0, z)), [bx, bz] = proj.project(tileLon(x1 + 1, z), tileLat(y1 + 1, z));
   if (clip) { ax = Math.max(ax, clip[0]); az = Math.max(az, clip[1]); bx = Math.min(bx, clip[0] + clip[2]); bz = Math.min(bz, clip[1] + clip[3]); }
-  const k = Math.min(MAX, renderer.capabilities.maxTextureSize) / Math.max(bx - ax, bz - az);
+  const k = MAX / Math.max(bx - ax, bz - az);
   const canvas = document.createElement('canvas');
   canvas.width = Math.round((bx - ax) * k); canvas.height = Math.round((bz - az) * k);
   const g = canvas.getContext('2d');
@@ -37,7 +36,7 @@ async function photo(dir, proj, renderer, clip) {
   await Promise.all(jobs);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  texture.anisotropy = renderer.getMaxAnisotropy();
   return { texture, rect: [ax, az, bx - ax, bz - az] };
 }
 
@@ -76,7 +75,6 @@ export async function loadBackdrop(base, photoBase, manifest, proj, renderer) {
     uSnowLine: { value: SNOW_LINE },
   };
   material.onBeforeCompile = (shader) => {
-    lampUniforms(shader);
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vBack;')
