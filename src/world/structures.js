@@ -1,6 +1,7 @@
 // Footbridges, station platforms and canopies (structures.json from tools/pipeline/extras.mjs), built once
 // for the whole area.
 import * as THREE from 'three/webgpu';
+import { lampLit } from './lamplight.js';
 import earcut from 'earcut';
 import { Soup, sections } from './rails.js';
 
@@ -68,7 +69,7 @@ export async function buildStructures(url, ground) {
     const c = new THREE.Color().setRGB(soup.col[i], soup.col[i + 1], soup.col[i + 2], THREE.SRGBColorSpace);
     soup.col[i] = c.r; soup.col[i + 1] = c.g; soup.col[i + 2] = c.b;
   }
-  const mesh = soup.mesh(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0.05, side: THREE.DoubleSide }));
+  const mesh = soup.mesh(lampLit(new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.8, metalness: 0.05, side: THREE.DoubleSide })));
   mesh.name = 'structures';
   return mesh;
 }

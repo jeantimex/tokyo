@@ -2,12 +2,12 @@
 // Local frame of every model: +y up, origin on the ground; `rot` from the tile turns local +z to the
 // direction given by the compiler (see tools/pipeline/landscape.mjs and markings.mjs).
 import * as THREE from 'three/webgpu';
-import { attribute, float, vec3, uv, mix, step, select } from 'three/tsl';
+import { Fn, attribute, float, vec3, uv, mix, step, select, texture, dot, sin, materialColor, positionLocal } from 'three/tsl';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Tree } from '@dgreenheck/ez-tree';
 import { PROP, DECAL } from '../shared/tileformat.js';
 import { shared } from './materials.js';
-import { LAMP_LAYER, lampMaterial } from './lamplight.js';
+import { LAMP_LAYER, lampMaterial, lampLit } from './lamplight.js';
 import { parkedVehicles } from './traffic.js';
 import { DECAL_COLS, DECAL_ROWS } from './decals.js';
 
@@ -324,26 +324,18 @@ const TREES = [
 // a few tens of metres away.
 // recolor: use only the brightness and outline of the leaf texture, and the tint as the colour (blossom).
 function leafMaterial(map, tint, recolor = false) {
-  const m = new THREE.MeshStandardMaterial({ map, color: tint, alphaTest: 0.18, side: THREE.DoubleSide, roughness: 0.85 });
-  m.onBeforeCompile = (shader) => {
-    shader.uniforms.uLampOn = { value: 0 }; shader.uniforms.uLampMap = shared.uLampMap; // (no lamp light here; the sampler still needs its texture)
-    if (recolor) shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `
-      vec4 leaf = texture2D(map, vMapUv);
-      diffuseColor.rgb *= 0.55 + 0.7 * dot(leaf.rgb, vec3(0.3, 0.6, 0.1));
-      diffuseColor.a *= leaf.a;`);
-    shader.uniforms.uTime = shared.uTime;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uTime;')
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-        #ifdef USE_INSTANCING
-          vec3 swayAt = (instanceMatrix * vec4(transformed, 1.0)).xyz;
-        #else
-          vec3 swayAt = transformed;
-        #endif
-        float sway = 0.6 * sin(uTime * 1.3 + swayAt.x * 0.35 + swayAt.z * 0.27) + 0.3 * sin(uTime * 2.9 + swayAt.x * 1.1 + swayAt.y);
-        transformed.xz += uv.y * sway * 0.07;`);
-  };
-  m.customProgramCacheKey = () => (recolor ? 'leaves-recolor-v1' : 'leaves-v1');
+  const m = new THREE.MeshStandardNodeMaterial({ map, color: tint, alphaTest: 0.18, side: THREE.DoubleSide, roughness: 0.85 });
+  if (recolor) {
+    const leaf = texture(map, uv());
+    m.colorNode = materialColor.mul(dot(leaf.rgb, vec3(0.3, 0.6, 0.1)).mul(0.7).add(0.55));
+    m.opacityNode = leaf.a;
+  }
+  // (the instance's own place is already in the position here, so every tree sways on its own)
+  m.positionNode = Fn(() => {
+    const p = positionLocal, t = shared.uTime;
+    const sway = sin(t.mul(1.3).add(p.x.mul(0.35)).add(p.z.mul(0.27))).mul(0.6).add(sin(t.mul(2.9).add(p.x.mul(1.1)).add(p.y)).mul(0.3));
+    return p.add(vec3(1, 0, 1).mul(uv().y.mul(sway).mul(0.07)));
+  })();
   return m;
 }
 
@@ -393,7 +385,7 @@ function blobTreeGeometry() {
 // ---------------------------------------------------------------- per-tile instancing
 export class Props {
   constructor() {
-    const std = (extra) => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.1, ...extra });
+    const std = (extra) => new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.1, ...extra });
     this.trees = TREES.map(buildTree);
     this.models = {
       pole: [poleGeometry(false), poleGeometry(true)], light: lightGeometry(), signal: signalGeometry(), vending: vendingGeometry(),
@@ -417,10 +409,10 @@ export class Props {
       pool: lampMaterial(glowTexture()),
       lens: lensMaterial(),
       poolCool: null,
-      decal: new THREE.MeshStandardMaterial({
+      decal: lampLit(new THREE.MeshStandardNodeMaterial({
         map: decalTexture(), transparent: true, depthWrite: false, roughness: 0.8,
         polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -10,
-      }),
+      })),
       wire: new THREE.LineBasicMaterial({ color: 0x14161a }),
     };
     this.mats.poolCool = lampMaterial(this.mats.pool.map); // white LED lamps on the back streets

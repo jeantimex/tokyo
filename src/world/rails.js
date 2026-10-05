@@ -1,6 +1,7 @@
 // Railways: track bed, rails, viaducts with piers, retaining walls and overhead-line masts, built
 // once for the whole area from rails.json (height profile from tools/pipeline/rails.mjs).
 import * as THREE from 'three/webgpu';
+import { lampLit } from './lamplight.js';
 import { Trains } from './trains.js';
 
 const STEP = 3;            // metres between cross-sections
@@ -209,7 +210,7 @@ export async function buildRailways(url, ground, cover = ground) {
     const c = lin(soup.col.slice(i, i + 3));
     soup.col[i] = c.r; soup.col[i + 1] = c.g; soup.col[i + 2] = c.b;
   }
-  group.add(bed.mesh(new THREE.MeshStandardMaterial({ map: bedTexture(), roughness: 0.95 })));
+  group.add(bed.mesh(lampLit(new THREE.MeshStandardNodeMaterial({ map: bedTexture(), roughness: 0.95 }))));
   group.add(structure.mesh(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0.05, side: THREE.DoubleSide })));
   const wg = new THREE.BufferGeometry();
   wg.setAttribute('position', new THREE.Float32BufferAttribute(wires, 3));

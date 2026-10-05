@@ -2,6 +2,8 @@
 // aerial photo — a coarse one of all of it and a sharper one of the land just beyond the last houses. It is
 // what stands on the horizon (Mt Fuji behind Fujinomiya) and has no buildings. High ground carries snow.
 import * as THREE from 'three/webgpu';
+import { Fn, texture, vec2, vec3, min, mix, smoothstep, atan, length, positionWorld } from 'three/tsl';
+import { vnoise } from './materials.js';
 
 const MAX = 4096;          // photo texture pixels along a side
 const SINK = 40;           // metres the backdrop is sunk under the area itself, so the detailed ground covers it
@@ -67,50 +69,31 @@ export async function loadBackdrop(base, photoBase, manifest, proj, renderer) {
   geometry.computeVertexNormals();
 
   const [far, near] = await Promise.all([photo(photoBase, proj, renderer, rect), photo(`${photoBase}/near`, proj, renderer)]);
-  const material = new THREE.MeshStandardMaterial({ color: far ? 0xffffff : 0x6f7a66, roughness: 1, metalness: 0 });
-  const uniforms = {
-    uFar: { value: far?.texture ?? null }, uFarRect: { value: new THREE.Vector4(...(far?.rect ?? [0, 0, 1, 1])) }, uFarOn: { value: far ? 1 : 0 },
-    uNear: { value: near?.texture ?? far?.texture ?? null }, uNearRect: { value: new THREE.Vector4(...(near?.rect ?? [0, 0, 1, 1])) }, uNearOn: { value: near ? 1 : 0 },
-    uPeak: { value: new THREE.Vector2(pos[top * 3], pos[top * 3 + 2]) }, // the highest summit: its snow runs down from there
-    uSnowLine: { value: SNOW_LINE },
-  };
-  material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms);
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vBack;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBack = position;');
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', /* glsl */ `#include <common>
-        varying vec3 vBack;
-        uniform sampler2D uFar, uNear;
-        uniform vec4 uFarRect, uNearRect;
-        uniform float uFarOn, uNearOn, uSnowLine;
-        uniform vec2 uPeak;
-        float backHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-        float backNoise(vec2 p) {
-          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-          return mix(mix(backHash(i), backHash(i + vec2(1.0, 0.0)), f.x), mix(backHash(i + vec2(0.0, 1.0)), backHash(i + vec2(1.0, 1.0)), f.x), f.y);
-        }
-        float backFbm(vec2 p) { return 0.5 * backNoise(p) + 0.25 * backNoise(p * 2.03) + 0.125 * backNoise(p * 4.01) + 0.0625 * backNoise(p * 8.1); }`)
-      .replace('#include <map_fragment>', /* glsl */ `
-        {
-          // the photo: the sharp one near the area, the coarse one beyond
-          vec2 fu = (vBack.xz - uFarRect.xy) / uFarRect.zw, nu = (vBack.xz - uNearRect.xy) / uNearRect.zw;
-          vec3 land = uFarOn > 0.5 ? texture2D(uFar, vec2(fu.x, 1.0 - fu.y)).rgb : vec3(1.0);
-          vec2 edge = min(nu, 1.0 - nu);
-          float sharp = uNearOn * smoothstep(0.0, 0.06, min(edge.x, edge.y));
-          if (sharp > 0.0) land = mix(land, texture2D(uNear, vec2(nu.x, 1.0 - nu.y)).rgb, sharp);
-          // snow: above a ragged line, reaching further down in the gullies that run from the summit
-          vec2 fromPeak = vBack.xz - uPeak;
-          float around = atan(fromPeak.y, fromPeak.x), out_ = length(fromPeak);
-          float gully = backFbm(vec2(around * 28.0, out_ * 0.00025)) - 0.47;
-          float line = uSnowLine + 520.0 * gully + 260.0 * (backFbm(vBack.xz * 0.0012) - 0.47);
-          float snow = smoothstep(line - 90.0, line + 160.0, vBack.y);
-          snow *= 0.82 + 0.18 * backNoise(vBack.xz * 0.02);
-          diffuseColor.rgb *= mix(land, vec3(0.93, 0.95, 0.98), snow);
-        }`);
-  };
-  material.customProgramCacheKey = () => 'backdrop-v1';
+  const material = new THREE.MeshStandardNodeMaterial({ roughness: 1, metalness: 0 });
+  const fbm = (p) => vnoise(p).mul(0.5).add(vnoise(p.mul(2.03)).mul(0.25)).add(vnoise(p.mul(4.01)).mul(0.125)).add(vnoise(p.mul(8.1)).mul(0.0625));
+  const peak = vec2(pos[top * 3], pos[top * 3 + 2]); // the highest summit: its snow runs down from there
+  material.colorNode = Fn(() => {
+    const at = positionWorld;
+    // the photo: the sharp one near the area, the coarse one beyond
+    const land = vec3(far ? 1 : 0.16).toVar();
+    if (far) {
+      const fu = at.xz.sub(vec2(far.rect[0], far.rect[1])).div(vec2(far.rect[2], far.rect[3]));
+      land.assign(texture(far.texture, vec2(fu.x, fu.y.oneMinus())).rgb);
+    }
+    if (near) {
+      const nu = at.xz.sub(vec2(near.rect[0], near.rect[1])).div(vec2(near.rect[2], near.rect[3])).toVar();
+      const edge = min(nu, nu.oneMinus());
+      const sharp = smoothstep(0, 0.06, min(edge.x, edge.y));
+      land.assign(mix(land, texture(near.texture, vec2(nu.x, nu.y.oneMinus())).rgb, sharp));
+    }
+    // snow: above a ragged line, reaching further down in the gullies that run from the summit
+    const fromPeak = at.xz.sub(peak).toVar();
+    const around = atan(fromPeak.y, fromPeak.x), out = length(fromPeak);
+    const gully = fbm(vec2(around.mul(28), out.mul(0.00025))).sub(0.47);
+    const line = gully.mul(520).add(SNOW_LINE).add(fbm(at.xz.mul(0.0012)).sub(0.47).mul(260)).toVar();
+    const snow = smoothstep(line.sub(90), line.add(160), at.y).mul(vnoise(at.xz.mul(0.02)).mul(0.18).add(0.82));
+    return mix(land, vec3(0.93, 0.95, 0.98), snow);
+  })();
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'backdrop';

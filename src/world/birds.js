@@ -4,6 +4,7 @@
 // settled in it is kept per flock in a small texture, everything else comes out of the vertex shader from the
 // time and a few random numbers per bird, so a thousand birds cost the CPU next to nothing.
 import * as THREE from 'three/webgpu';
+import { Fn, attribute, texture, float, vec2, vec3, select, mix, clamp, max, smoothstep, fract, sin, cos, pow, normalize, cross, positionGeometry } from 'three/tsl';
 import { shared } from './materials.js';
 
 export const MAX_BIRDS = 2000;
@@ -41,11 +42,48 @@ export function createBirds() {
   const data = new Float32Array(FLOCKS * 2 * 4);
   const flockTex = new THREE.DataTexture(data, FLOCKS, 2, THREE.RGBAFormat, THREE.FloatType);
   flockTex.minFilter = flockTex.magFilter = THREE.NearestFilter;
-  const material = new THREE.MeshBasicNodeMaterial({ side: THREE.DoubleSide }); // (stage C of the WebGPU port: the flight)
+  const material = new THREE.MeshBasicNodeMaterial({ side: THREE.DoubleSide });
+  const aSeed = attribute('aSeed', 'vec4'), aWing = attribute('aWing', 'float');
+  const hash1 = (n) => fract(sin(n.mul(127.1)).mul(43758.5453));
+  // how much of the bird is still in the air (1), with the flock settled by 'perch': one bird after another
+  const aloft = (perch) => { const b = clamp(perch.mul(1.4).sub(aSeed.w.mul(0.4)), 0, 1); return b.mul(b).mul(b.mul(-2).add(3)).oneMinus(); };
+  // where the bird is at time t
+  const place = (t, flock, perch) => {
+    const f = aSeed.x;
+    // the flock: a slow, never-repeating loop above its tree, at a height of its own
+    const reach = vec2(hash1(f.add(1)), hash1(f.add(5))).mul(170).add(45);
+    const c = vec3(
+      reach.x.mul(sin(t.mul(hash1(f.add(8)).mul(0.06).add(0.05)).add(hash1(f.add(2)).mul(6.28)))),
+      pow(hash1(f.add(3)), 2).mul(230).add(22).add(sin(t.mul(0.05).add(hash1(f.add(4)).mul(6.28))).mul(14)),
+      reach.y.mul(sin(t.mul(hash1(f.add(10)).mul(0.06).add(0.05)).add(hash1(f.add(6)).mul(6.28)))));
+    // the bird: round the flock on its own circle, rising and falling a little
+    const radius = aSeed.y.mul(55).add(8), turn = aSeed.z.add(0.5).mul(4.5).div(radius).mul(select(hash1(f.add(7)).lessThan(0.5), -1, 1));
+    const a = t.mul(turn).add(aSeed.w.mul(6.28));
+    const ownY = max(sin(t.mul(0.21).add(aSeed.z.mul(6.28))).mul(9).add(aSeed.w.sub(0.5).mul(50)), float(4).sub(c.y));
+    const own = vec3(cos(a).mul(radius), ownY, sin(a).mul(radius).mul(0.8));
+    // settled, it sits somewhere in the crown
+    const twig = vec3(aSeed.y, aSeed.z, aSeed.w).sub(0.5).mul(vec3(3, 2, 3));
+    return flock.xyz.add(mix(twig, c.add(own), aloft(perch)));
+  };
+  material.positionNode = Fn(() => {
+    const u = aSeed.x.add(0.5).div(FLOCKS), t = shared.uTime;
+    const flock = texture(flockTex, vec2(u, 0.25)).toVar(), rate = texture(flockTex, vec2(u, 0.75)).x;
+    const p = place(t, flock, flock.w).toVar(), ahead = place(t.add(0.25), flock, clamp(flock.w.add(rate.mul(0.25)), 0, 1));
+    const fwd = normalize(ahead.sub(p).add(vec3(0, 0, 1e-4))).toVar(), right = normalize(cross(vec3(0, 1, 0), fwd)).toVar(), up = cross(fwd, right);
+    // wings: beat for a while, then glide with the wings held a little up
+    const beat = smoothstep(-0.2, 0.3, sin(t.mul(0.35).add(aSeed.y.mul(6.28))));
+    const lift = mix(0.18, sin(t.mul(8).mul(aSeed.z.mul(0.3).add(0.85)).add(aSeed.w.mul(6.28))), beat).mul(0.55).toVar();
+    // (a bird in the tree is not seen: it shrinks away among the leaves as it arrives)
+    const local = positionGeometry.mul(0.7).mul(smoothstep(0, 0.05, aloft(flock.w))).toVar();
+    local.y.addAssign(local.x.abs().mul(lift).mul(aWing));
+    local.x.mulAssign(lift.abs().mul(aWing).mul(0.22).oneMinus());
+    return p.add(right.mul(local.x)).add(up.mul(local.y)).add(fwd.mul(local.z));
+  })();
+  material.colorNode = vec3(0.82, 0.82, 0.84).mul(aWing.mul(0.25).add(0.75)).mul(mix(1, 0.5, shared.uDark)); // (still white against the night sky)
   const mesh = new THREE.Mesh(birdGeometry(), material);
   mesh.frustumCulled = false; // (they are placed in the shader)
   mesh.name = 'birds';
-  mesh.visible = false;
+  mesh.castShadow = true; // (the shadow pass places the birds with the same position node)
   mesh.geometry.instanceCount = 100;
 
   // ---- the flocks: which tree, and flying / coming down / in the tree / leaving it

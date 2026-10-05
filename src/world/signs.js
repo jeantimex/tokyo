@@ -1,6 +1,7 @@
 // Signboards (tools/pipeline/signs.mjs). Far away a sign is a coloured panel; when its tile comes near,
 // the names are drawn into a texture atlas for that tile. All of them glow at night.
 import * as THREE from 'three/webgpu';
+import { diffuseColor } from 'three/tsl';
 import { shared } from './materials.js';
 import { Ads } from './ads.js';
 
@@ -51,14 +52,8 @@ function drawSign(g, s, x, y, w, h) {
 export class Signs {
   constructor() {
     // far: coloured panels, lit at night through their own colour
-    this.panel = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, side: THREE.DoubleSide });
-    this.panel.onBeforeCompile = (shader) => {
-    shader.uniforms.uLampOn = { value: 0 }; shader.uniforms.uLampMap = shared.uLampMap; // (no lamp light here; the sampler still needs its texture)
-      shader.uniforms.uNight = shared.uNight;
-      shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform float uNight;')
-        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * uNight * 1.3;');
-    };
+    this.panel = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.6, side: THREE.DoubleSide });
+    this.panel.emissiveNode = diffuseColor.rgb.mul(shared.uNight).mul(1.3);
     this.live = new Set(); // textured materials currently in use
     this.ads = new Ads();
   }

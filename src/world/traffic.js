@@ -10,6 +10,7 @@
 //   - where lanes merge, vehicles queue instead of entering side by side
 //   - never enter a junction without room on the far side
 import * as THREE from 'three/webgpu';
+import { attribute, varyingProperty, select, vec3, float, max } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { shared } from './materials.js';
 import { LAMP_LAYER, lampMaterial } from './lamplight.js';
@@ -122,28 +123,18 @@ export function parkedVehicles() {
 }
 
 function carMaterial(lit = true) {
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.28, metalness: 0.5 });
-  m.onBeforeCompile = (shader) => {
-    shader.uniforms.uLampOn = { value: 0 }; shader.uniforms.uLampMap = shared.uLampMap; // (no lamp light here; the sampler still needs its texture)
-    shader.uniforms.uNight = shared.uNight;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aGlow;\nvarying float vGlow;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGlow = aGlow;');
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uNight;\nvarying float vGlow;')
-      // lamps keep their own colour instead of the body paint, and shine at night
-      .replace('#include <color_fragment>', `#include <color_fragment>
-        vec3 lamp = vGlow > 1.5 ? vec3(0.9, 0.03, 0.02) : vec3(1.0, 0.96, 0.85);
-        if (vGlow > 0.5 && vGlow < 2.5) diffuseColor.rgb = lamp * 0.6;`)
-      // glass is a dark mirror, rubber and trim are matt, the paint has a hard shine
-      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = vGlow > 3.5 ? 0.85 : vGlow > 2.5 ? 0.06 : roughnessFactor;')
-      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vGlow > 3.5 ? 0.0 : vGlow > 2.5 ? 0.9 : metalnessFactor;')
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        if (vGlow > 0.5 && vGlow < 2.5) totalEmissiveRadiance += lamp * (0.15 + uNight * ${lit ? '(vGlow > 1.5 ? 2.0 : 3.6)' : '0.0'});`)
-      // (the windows are marked in alpha for the reflection pass, like those of the buildings)
-      .replace('#include <opaque_fragment>', '#include <opaque_fragment>\nif (vGlow > 2.5 && vGlow < 3.5) gl_FragColor.a = 0.1;');
-  };
-  m.customProgramCacheKey = () => (lit ? 'car-v3' : 'car-parked-v3');
+  const m = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.28, metalness: 0.5 });
+  const glow = attribute('aGlow', 'float'); // 1 headlamp, 2 tail lamp, 3 glass, 4 rubber and trim
+  const isLamp = glow.greaterThan(0.5).and(glow.lessThan(2.5));
+  const lamp = select(glow.greaterThan(1.5), vec3(0.9, 0.03, 0.02), vec3(1, 0.96, 0.85));
+  // lamps keep their own colour instead of the body paint (the vertex colour and the car's own colour are
+  // multiplied in afterwards: they are divided out here), and shine at night
+  const paint = attribute('color', 'vec3').mul(varyingProperty('vec3', 'vInstanceColor'));
+  m.colorNode = select(isLamp, lamp.mul(0.6).div(max(paint, vec3(1e-3))), vec3(1));
+  // glass is a dark mirror, rubber and trim are matt, the paint has a hard shine
+  m.roughnessNode = select(glow.greaterThan(3.5), 0.85, select(glow.greaterThan(2.5), 0.06, 0.28));
+  m.metalnessNode = select(glow.greaterThan(3.5), 0, select(glow.greaterThan(2.5), 0.9, 0.5));
+  m.emissiveNode = select(isLamp, lamp.mul(lit ? shared.uNight.mul(select(glow.greaterThan(1.5), 2.0, 3.6)).add(0.15) : float(0.15)), vec3(0));
   return m;
 }
 

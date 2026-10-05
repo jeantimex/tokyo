@@ -4,6 +4,7 @@
 // sign words. No real character, brand or logo is used. A screen cycles through the posters with a wipe,
 // seen through an LED grid. Everything glows at night; screens are bright all day.
 import * as THREE from 'three/webgpu';
+import { Fn, attribute, property, texture, uv, float, vec2, floor, fract, clamp, mix, step, smoothstep, select, max, fwidth } from 'three/tsl';
 import { shared } from './materials.js';
 
 const COLS = 8, ROWS = 4, SIZE = 512;
@@ -147,42 +148,31 @@ function atlas() {
 export class Ads {
   constructor() {
     // uv: position within the board (0-1); aAd: x poster index, y 0 board / 1 screen / 2 banner, z seed
-    this.material = new THREE.MeshStandardMaterial({ map: atlas(), roughness: 0.5 });
-    this.material.onBeforeCompile = (shader) => {
-    shader.uniforms.uLampOn = { value: 0 }; shader.uniforms.uLampMap = shared.uLampMap; // (no lamp light here; the sampler still needs its texture)
-      shader.uniforms.uNight = shared.uNight;
-      shader.uniforms.uTime = shared.uTime;
-      shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute vec3 aAd;\nvarying vec3 vAd;\nvarying vec2 vBoard;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvAd = aAd;\nvBoard = uv;');
-      shader.fragmentShader = shader.fragmentShader
-        .replace('#include <map_pars_fragment>', `#include <map_pars_fragment>
-          uniform float uNight, uTime;
-          varying vec3 vAd;
-          varying vec2 vBoard;
-          vec3 gAd;
-          vec3 poster(float index, vec2 at) {
-            float i = floor(index + 0.5); // the index is interpolated: round it
-            vec2 cell = vec2(mod(i, ${COLS}.0), ${ROWS - 1}.0 - floor(i / ${COLS}.0));
-            return texture2D(map, (cell + clamp(at, 0.004, 0.996)) / vec2(${COLS}.0, ${ROWS}.0)).rgb;
-          }`)
-        .replace('#include <map_fragment>', `
-          if (vAd.y > 1.5) gAd = poster(vAd.x, vec2(vBoard.x / 3.0, vBoard.y));      // a banner: the left third of its cell
-          else if (vAd.y > 0.5) {
-            // a screen: the next poster wipes in every few seconds; LED pixels show close up
-            float t = uTime * 0.16 + vAd.z * 9.0, wipe = smoothstep(0.86, 1.0, fract(t));
-            float now = mod(vAd.x + floor(t), ${WIDE}.0), next = mod(now + 1.0, ${WIDE}.0);
-            gAd = mix(poster(now, vBoard), poster(next, vBoard), step(vBoard.x, wipe));
-            vec2 led = fract(vBoard * vec2(160.0, 90.0));
-            float fine = max(fwidth(vBoard.x * 160.0), fwidth(vBoard.y * 90.0));
-            gAd *= mix(0.72 + 0.5 * step(0.22, led.x) * step(0.22, led.y), 1.0, smoothstep(0.3, 1.0, fine));
-          } else gAd = poster(vAd.x, vBoard);
-          // by day an unlit neon sign is dull glass on a dark board: only its colour shows
-          diffuseColor.rgb *= mix(gAd * 0.55 + 0.03, gAd, uNight);`)
-        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-          totalEmissiveRadiance += gAd * (vAd.y > 0.5 && vAd.y < 1.5 ? 1.0 + 0.9 * uNight : 0.1 + 2.2 * uNight);`);
+    const map = atlas(), { uNight, uTime } = shared;
+    this.material = new THREE.MeshStandardNodeMaterial({ roughness: 0.5 });
+    const pAd = property('vec3', 'pAd');
+    const poster = (index, at) => {
+      const i = floor(index.add(0.5)); // the index is interpolated: round it
+      const cell = vec2(i.mod(COLS), float(ROWS - 1).sub(floor(i.div(COLS))));
+      return texture(map, cell.add(clamp(at, 0.004, 0.996)).div(vec2(COLS, ROWS))).rgb;
     };
-    this.material.customProgramCacheKey = () => 'ads-v2';
+    this.material.colorNode = Fn(() => {
+      const ad = attribute('aAd', 'vec3'), board = uv();
+      const banner = poster(ad.x, vec2(board.x.div(3), board.y)); // a banner: the left third of its cell
+      const plain = poster(ad.x, board);
+      // a screen: the next poster wipes in every few seconds; LED pixels show close up
+      const t = uTime.mul(0.16).add(ad.z.mul(9)).toVar(), wipe = smoothstep(0.86, 1, fract(t));
+      const now = ad.x.add(floor(t)).mod(WIDE).toVar(), next = now.add(1).mod(WIDE);
+      const led = fract(board.mul(vec2(160, 90)));
+      const fine = max(fwidth(board.x.mul(160)), fwidth(board.y.mul(90)));
+      const screen = mix(poster(now, board), poster(next, board), step(board.x, wipe))
+        .mul(mix(step(0.22, led.x).mul(step(0.22, led.y)).mul(0.5).add(0.72), 1, smoothstep(0.3, 1, fine)));
+      pAd.assign(select(ad.y.greaterThan(1.5), banner, select(ad.y.greaterThan(0.5), screen, plain)));
+      // by day an unlit neon sign is dull glass on a dark board: only its colour shows
+      return mix(pAd.mul(0.55).add(0.03), pAd, uNight);
+    })();
+    const isScreen = attribute('aAd', 'vec3').y.greaterThan(0.5).and(attribute('aAd', 'vec3').y.lessThan(1.5));
+    this.material.emissiveNode = pAd.mul(select(isScreen, uNight.mul(0.9).add(1), uNight.mul(2.2).add(0.1)));
     this.frame = new THREE.MeshStandardMaterial({ color: 0x2a2c2f, roughness: 0.6, metalness: 0.4, side: THREE.DoubleSide });
   }
 

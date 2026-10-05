@@ -1,6 +1,7 @@
 // Elevated roads: the Shuto expressway, its ramps and ordinary road bridges. Built once for the whole
 // area from roads.json, whose points carry the road level (tools/pipeline/roadprofile.mjs).
 import * as THREE from 'three/webgpu';
+import { lampLit } from './lamplight.js';
 import { Soup, sections } from './rails.js';
 
 const DECK_ABOVE = 2.0;   // road level this far above the ground gets a deck on piers; lower, a walled ramp
@@ -68,7 +69,7 @@ export async function buildFlyovers(url, ground) {
     const c = new THREE.Color().setRGB(soup.col[i], soup.col[i + 1], soup.col[i + 2], THREE.SRGBColorSpace);
     soup.col[i] = c.r; soup.col[i + 1] = c.g; soup.col[i + 2] = c.b;
   }
-  const mesh = soup.mesh(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.02, side: THREE.DoubleSide }));
+  const mesh = soup.mesh(lampLit(new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.02, side: THREE.DoubleSide })));
   mesh.name = 'flyovers';
   return mesh;
 }

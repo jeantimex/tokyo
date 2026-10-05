@@ -23,6 +23,7 @@ import { WaterMirror } from './world/mirror.js';
 import { LampLight } from './world/lamplight.js';
 
 const params = new URLSearchParams(location.search);
+if (params.get('trace') === '1') THREE.Node.captureStackTrace = true; // (where a node error comes from)
 const AREA = params.get('area') || 'tokyo'; // (the first of the city switch)
 
 // The loading screen (index.html): the city's name, a bar and what is being done.
