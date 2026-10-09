@@ -54,7 +54,7 @@ export class Environment {
     // By night: the moon's light, the city's own glow (each 1 as designed), and how bright the night is shown.
     this.moonStrength = 1; this.glowStrength = 1; this.nightBrightness = 1;
     this.balance = new THREE.Vector3(1, 1, 1); // (see apply)
-    this.plain = true; // the tone curve is Bruneton's (set by whoever sets the curve)
+    this.plain = false; // the tone curve is Bruneton's (set by whoever sets the curve)
     this.sunDir = new THREE.Vector3(0.3, 0.8, 0.5).normalize(); // where the light comes from: the sun, or the moon by night
     this.bloom = BLOOM.day;
 

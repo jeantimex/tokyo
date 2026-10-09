@@ -45,7 +45,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
 // tint), contrast, highlights and shadows, saturation and vibrance (which colours the dull more than the vivid),
 // darker corners. (Contrast and saturation 1, the rest 0: the picture passes unchanged.)
 // (as the picture is shown unless set otherwise)
-const PICTURE = { contrast: 1, saturation: 1 }; // (nothing is done to the picture)
+const PICTURE = { contrast: 1, saturation: 1, highlights: 0.15, shadows: 0.03, tint: -0.25 };
 class Picture extends Effect {
   constructor() {
     super('Picture', `uniform float contrast, highlights, shadows, saturation, vibrance, temperature, tint, vignette;
@@ -257,7 +257,7 @@ export class Atmosphere {
     this.smaaPass = new EffectPass(camera, new SMAAEffect({ preset: SMAAPreset.HIGH }));
     this.composer.addPass(this.smaaPass);
     this.composer.autoRenderToScreen = false; // (which pass is the last one is said below)
-    this.curve = 'bruneton';
+    this.curve = 'neutral'; // (the curve that keeps colours as they are)
     this.antialias = 'off';
     this.hazeAmount = 0;
     this.connect();

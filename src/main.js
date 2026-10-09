@@ -133,7 +133,7 @@ shared.uSeason.value = Math.max(0, ['summer', 'autumn', 'spring'].indexOf(params
 atmosphere.antialias = params.get('aa') ?? 'smaa';
 const contact = new ContactShadows(renderer);
 if (Number(params.get('contact')) > 0) { shared.uContact.value = Number(params.get('contact')); setVariant({ contact: true }); }
-if (Number(params.get('fog')) > 0) atmosphere.fog = Number(params.get('fog')); // (no haze but the atmosphere's own, unless asked for)
+atmosphere.fog = params.get('fog') != null ? Number(params.get('fog')) : 0.01; // (a trace of haze, unless ?fog= says otherwise)
 shared.uGlintOn.value = params.get('glint') != null ? Number(params.get('glint')) : 2; // (1: as it was designed; brighter by default)
 env.brightness = Number(params.get('brightness')) || 1;
 if (params.get('abstract') === '1') setAbstract(true);
@@ -333,7 +333,7 @@ const previewMode = { on: params.get('preview') !== '0', live: params.get('previ
 
   // The panel's settings are kept (in this browser) and are the same for every city: what is switched off in
   // one is off in the next. A URL that sets something itself (?time=, ?cars=, ...) is taken as it stands.
-  const KEY = 'procedural-tokyo:settings:14'; // (a new number when the defaults change: what was kept before is left behind)
+  const KEY = 'procedural-tokyo:settings:15'; // (a new number when the defaults change: what was kept before is left behind)
   const explicit = [...params.keys()].some((k) => k !== 'area');
   // (the city is the page's, not a setting; and the abstract model is never kept: the page always opens on the city as it is)
   const strip = (saved) => { delete saved.controllers?.city; delete saved.folders?.['Abstract model']?.controllers?.['abstract model'];
