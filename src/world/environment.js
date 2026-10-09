@@ -21,6 +21,10 @@ const LIGHT = 10;
 const EXPOSURE = { target: 1.8, least: 0.38, most: 1.7 };
 const BLOOM = { day: 0.12, night: 0.45 };
 const DAYLIGHT = new THREE.Vector3(0.83, 1, 1.2); // what daylight is multiplied by to be white on the screen
+// The picture as in Bruneton's demo (`plain`). night: the exposure by night. radiance: the atmosphere library works
+// in luminance (the sky's radiance times a factor for each of red, green and blue, as in the demo's other mode);
+// the demo shows radiance, which is bluer: the factors are taken out again.
+const PLAIN = { night: 1.4, radiance: new THREE.Vector3(1 / 1.5185, 1 / 0.9417, 1 / 0.8626) };
 const MOON = { strength: 0.32, color: new THREE.Color(0x9fb4e0) };
 // the night's even light: a city is never dark — its own lights come back from the haze above it, a pale grey on everything
 const GLOW = { strength: 0.5, sky: new THREE.Color(0xe6eaf4), ground: new THREE.Color(0x8a8172) };
@@ -50,6 +54,7 @@ export class Environment {
     // By night: the moon's light, the city's own glow (each 1 as designed), and how bright the night is shown.
     this.moonStrength = 1; this.glowStrength = 1; this.nightBrightness = 1;
     this.balance = new THREE.Vector3(1, 1, 1); // (see apply)
+    this.plain = true; // the tone curve is Bruneton's (set by whoever sets the curve)
     this.sunDir = new THREE.Vector3(0.3, 0.8, 0.5).normalize(); // where the light comes from: the sun, or the moon by night
     this.bloom = BLOOM.day;
 
@@ -177,8 +182,16 @@ export class Environment {
     const light = 0.3 * lum(this.sun.color) * this.sun.intensity * Math.max(this.sunDir.y, 0.05) + 2.5 * (0.2126 * sh.x + 0.7152 * sh.y + 0.0722 * sh.z) * this.skyLight.intensity + 1.3 * t * t * t;
     this.renderer.toneMappingExposure = THREE.MathUtils.clamp(EXPOSURE.target / Math.max(light, 1e-3), EXPOSURE.least, EXPOSURE.most) * this.brightness * (1 + (this.nightBrightness - 1) * t);
     this.bloom = lerp(BLOOM.day, BLOOM.night);
+    if (this.plain) {
+      // As Bruneton's demo shows its sky: a fixed exposure (its 10, which is 1 in the scene's units) for as long as
+      // the sun is up, the light simply fading with it — and more only as night comes, for the city's own lights;
+      // no glow round the sun.
+      const late = 1 - THREE.MathUtils.smoothstep(this.elevation, -8, -1);
+      this.renderer.toneMappingExposure = (1 + (PLAIN.night - 1) * late) * this.brightness * (1 + (this.nightBrightness - 1) * late);
+      this.bloom = BLOOM.night * late;
+    }
     // the white balance: for daylight — the sun's light a warm white, here cooled to the screen's — and none by night
-    this.balance.set(1, 1, 1).lerp(DAYLIGHT, this.daylight);
+    this.balance.set(1, 1, 1).lerp(this.plain ? PLAIN.radiance : DAYLIGHT, this.plain ? 1 - t : this.daylight);
     shared.uNight.value = this.night;
     shared.uDark.value = t;
   }

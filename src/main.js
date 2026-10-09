@@ -133,7 +133,7 @@ shared.uSeason.value = Math.max(0, ['summer', 'autumn', 'spring'].indexOf(params
 atmosphere.antialias = params.get('aa') ?? 'smaa';
 const contact = new ContactShadows(renderer);
 if (Number(params.get('contact')) > 0) { shared.uContact.value = Number(params.get('contact')); setVariant({ contact: true }); }
-atmosphere.fog = params.get('fog') != null ? Number(params.get('fog')) : 0.01; // (a trace of haze, unless ?fog= says otherwise)
+if (Number(params.get('fog')) > 0) atmosphere.fog = Number(params.get('fog')); // (no haze but the atmosphere's own, unless asked for)
 shared.uGlintOn.value = params.get('glint') != null ? Number(params.get('glint')) : 2; // (1: as it was designed; brighter by default)
 env.brightness = Number(params.get('brightness')) || 1;
 if (params.get('abstract') === '1') setAbstract(true);
@@ -242,7 +242,7 @@ const previewMode = { on: params.get('preview') !== '0', live: params.get('previ
   // the finished picture, as in a photo editor
   const picture = gui.addFolder('Picture'), look = atmosphere.picture;
   picture.$children.prepend(histogram.canvas);
-  picture.add(atmosphere, 'curve', ['agx', 'aces', 'neutral']).name('tone curve');
+  picture.add(atmosphere, 'curve', ['bruneton', 'agx', 'aces', 'neutral']).name('tone curve');
   picture.add(env, 'brightness', 0.4, 2.5, 0.01).name('exposure');
   picture.add(look.contrast, 'value', 0.6, 1.6, 0.01).name('contrast');
   picture.add(look.highlights, 'value', -1, 1, 0.01).name('highlights');
@@ -333,7 +333,7 @@ const previewMode = { on: params.get('preview') !== '0', live: params.get('previ
 
   // The panel's settings are kept (in this browser) and are the same for every city: what is switched off in
   // one is off in the next. A URL that sets something itself (?time=, ?cars=, ...) is taken as it stands.
-  const KEY = 'procedural-tokyo:settings:13'; // (a new number when the defaults change: what was kept before is left behind)
+  const KEY = 'procedural-tokyo:settings:14'; // (a new number when the defaults change: what was kept before is left behind)
   const explicit = [...params.keys()].some((k) => k !== 'area');
   // (the city is the page's, not a setting; and the abstract model is never kept: the page always opens on the city as it is)
   const strip = (saved) => { delete saved.controllers?.city; delete saved.folders?.['Abstract model']?.controllers?.['abstract model'];
@@ -522,7 +522,9 @@ function tick() {
   contact.update(scene, controls.target, camera.position, [birds]);
   shared.uTreeGlow.value.setRGB(...ABSTRACT.night.tree).multiplyScalar(variant.abstract ? env.dark : 0);
   atmosphere.bloom.intensity = guiState.bloom ? env.bloom * 3 : 0;
+  if (env.plain !== (atmosphere.curve === 'bruneton')) { env.plain = atmosphere.curve === 'bruneton'; env.apply(); }
   atmosphere.balance.uniforms.get('gain').value.copy(env.balance);
+  atmosphere.curveEffect.uniforms.get('exposure').value = renderer.toneMappingExposure;
   waterMirror.enabled = atmosphere.reflect && !variant.abstract; // (the abstract model's water mirrors nothing)
   waterMirror.update(scene, camera, streamer.tiles, controls.target, [traffic.group.parent ? null : traffic.group]);
   atmosphere.lightFog(env.dark, env.warmth * env.daylight, controls.target.y);

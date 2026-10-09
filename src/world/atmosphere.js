@@ -45,7 +45,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
 // tint), contrast, highlights and shadows, saturation and vibrance (which colours the dull more than the vivid),
 // darker corners. (Contrast and saturation 1, the rest 0: the picture passes unchanged.)
 // (as the picture is shown unless set otherwise)
-const PICTURE = { contrast: 1, saturation: 1, highlights: 0.15, shadows: 0.03, tint: -0.25 };
+const PICTURE = { contrast: 1, saturation: 1 }; // (nothing is done to the picture)
 class Picture extends Effect {
   constructor() {
     super('Picture', `uniform float contrast, highlights, shadows, saturation, vibrance, temperature, tint, vignette;
@@ -71,6 +71,16 @@ class Balance extends Effect {
   constructor() {
     super('Balance', 'uniform vec3 gain; void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) { outputColor = vec4(inputColor.rgb * gain, inputColor.a); }',
       { uniforms: new Map([['gain', new THREE.Uniform(new THREE.Vector3(1, 1, 1))]]) });
+  }
+}
+
+// The tone curve of Bruneton's precomputed atmospheric scattering demo: 1 - exp(-radiance * exposure). Light is
+// never cut off at white, it only nears it: the sky keeps its colour up to the sun, and the sun is a disc. (The
+// renderer's linear "tone mapping" follows and multiplies by the exposure: it is divided out here.)
+class Curve extends Effect {
+  constructor() {
+    super('Curve', 'uniform float on, exposure; void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) { outputColor = on > 0.5 ? vec4((1.0 - exp(-max(inputColor.rgb, 0.0) * exposure)) / exposure, inputColor.a) : inputColor; }',
+      { uniforms: new Map([['on', new THREE.Uniform(0)], ['exposure', new THREE.Uniform(1)]]) });
   }
 }
 
@@ -232,19 +242,22 @@ export class Atmosphere {
     this.gradeEffect = new Grade();
     // the end of the picture as the atmosphere library's own examples have it: the flare of the lens round what is
     // very bright, the AgX tone curve, and a dither against banding in the sky
-    this.composer.addPass(new EffectPass(camera, new LensFlareEffect()));
-    this.toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.NEUTRAL }); // (the curve that keeps colours as they are)
+    this.flarePass = new EffectPass(camera, new LensFlareEffect());
+    this.composer.addPass(this.flarePass);
+    this.toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.LINEAR });
+    this.curveEffect = new Curve();
     this.pictureEffect = new Picture();
     // (the picture's settings by name: contrast, highlights, shadows, saturation, vibrance, temperature, tint, vignette)
     this.picture = Object.fromEntries([...this.pictureEffect.uniforms].map(([k, u]) => [k, u]));
     this.balance = new Balance(); // (its gain: the white balance, set by whoever knows the light — main.js)
-    this.finalPass = new EffectPass(camera, this.balance, this.bloom, this.toneMapping, this.gradeEffect, this.pictureEffect, new DitheringEffect());
+    this.finalPass = new EffectPass(camera, this.balance, this.bloom, this.curveEffect, this.toneMapping, this.gradeEffect, this.pictureEffect, new DitheringEffect());
     this.composer.addPass(this.finalPass);
     // smooth edges (see `antialias`): a pass over the finished picture that finds the stair-steps and blends
     // them (SMAA), and/or several samples per pixel when the scene is drawn (MSAA)
     this.smaaPass = new EffectPass(camera, new SMAAEffect({ preset: SMAAPreset.HIGH }));
     this.composer.addPass(this.smaaPass);
     this.composer.autoRenderToScreen = false; // (which pass is the last one is said below)
+    this.curve = 'bruneton';
     this.antialias = 'off';
     this.hazeAmount = 0;
     this.connect();
@@ -298,8 +311,14 @@ export class Atmosphere {
   }
   // How strongly the finished picture is graded (0: not at all).
   // The tone curve: 'agx' (soft, as the atmosphere library's examples), 'aces' (more contrast) or 'neutral' (keeps colours).
-  get curve() { return { [ToneMappingMode.AGX]: 'agx', [ToneMappingMode.ACES_FILMIC]: 'aces', [ToneMappingMode.NEUTRAL]: 'neutral' }[this.toneMapping.mode]; }
-  set curve(v) { this.toneMapping.mode = { agx: ToneMappingMode.AGX, aces: ToneMappingMode.ACES_FILMIC, neutral: ToneMappingMode.NEUTRAL }[v] ?? ToneMappingMode.AGX; }
+  get curve() { return this.curveName; }
+  set curve(v) {
+    const modes = { agx: ToneMappingMode.AGX, aces: ToneMappingMode.ACES_FILMIC, neutral: ToneMappingMode.NEUTRAL };
+    this.curveName = v in modes ? v : 'bruneton';
+    this.toneMapping.mode = modes[v] ?? ToneMappingMode.LINEAR;
+    this.curveEffect.uniforms.get('on').value = v in modes ? 0 : 1;
+    this.flarePass.enabled = v in modes; // (no flare of the lens in Bruneton's picture: the sun is its disc)
+  }
   get grade() { return this.gradeEffect.uniforms.get('amount').value; }
   set grade(v) { this.gradeEffect.uniforms.get('amount').value = v; }
   // The fog's colour is the light it stands in: dark (0 day .. 1 night), warm (0 .. 1: the low sun); ground: the
