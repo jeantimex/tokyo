@@ -43,6 +43,13 @@
       #loader .bar { width: min(420px, 60vw); height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
       #loader .fill { height: 100%; width: 0%; background: linear-gradient(90deg, #22e6ff, #ff3d9a); box-shadow: 0 0 12px #ff3d9a; transition: width 0.25s ease; }
       #loader .step { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; color: rgba(244, 248, 255, 0.6); min-height: 1.4em; }
+      /* a phone, upright or on its side: the credits take more than one line, beside the switch; the link to the source is its mark alone, at the top */
+      @media (max-width: 600px), (max-height: 500px) {
+        #credits { left: 92px; font-size: 9px; line-height: 1.35; text-align: right; }
+        #github { right: auto; bottom: auto; left: 12px; top: 12px; padding: 6px; font-size: 0; }
+        #github svg { width: 18px; height: 18px; }
+        #hud { top: 50px; max-width: calc(100vw - 48px); font-size: 10px; }
+      }
     </style>
   </head>
   <body>

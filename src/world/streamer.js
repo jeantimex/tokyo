@@ -15,6 +15,21 @@ const MAX_IN_FLIGHT = WORKERS * 2;
 const ROOFS_FULL = 600, WALLS_FULL = 900;
 const SHOW_BYTES = 3e6; // of a new tile's meshes shown per frame (see onResult)
 
+// Things that never change keep their vertices on the graphics card only: once they have been sent there, the
+// page's own copy is let go. For a city that is hundreds of megabytes the page held twice over (on a phone, whose
+// graphics card shares the one memory, a page that holds that much is closed by the browser). Nothing reads them
+// again; nor are they picked (only the facades are: they keep theirs).
+function letGo() { this.array = null; }
+export function gpuOnly(root) {
+  root.traverse((o) => {
+    if (!(o.isMesh || o.isLine) || o.isInstancedMesh || o.userData.facade) return;
+    o.raycast = () => {};
+    for (const a of Object.values(o.geometry.attributes)) a.onUpload(letGo);
+    o.geometry.index?.onUpload(letGo);
+  });
+  return root;
+}
+
 function geometry(arrays, attrs) {
   const g = new THREE.BufferGeometry();
   for (const [name, size] of attrs) if (arrays[name]?.length) g.setAttribute(name, new THREE.BufferAttribute(arrays[name], size));
@@ -34,6 +49,9 @@ export class Streamer {
     this.base = base;
     this.radius = radius;
     this.hysteresis = hysteresis;
+    // How far out the full-size photos are used, as a share of ROOFS_FULL and WALLS_FULL: on a screen of fewer pixels
+    // the small photo is as sharp as the screen out to a shorter distance (see main.js).
+    this.photoReach = 1;
     this.tiles = new Map(); // key -> { state, group, info, ends, tris }
     this.inFlight = 0;
     this.stats = { loaded: 0, buildings: 0, triangles: 0 };
@@ -88,7 +106,7 @@ export class Streamer {
         t.trees.near.visible = near; t.trees.far.visible = !near;
       }
       for (const a of t.atlases) {
-        const want = d < a.dist * (a.full || a.loading ? 1.3 : 1);
+        const want = d < a.dist * this.photoReach * (a.full || a.loading ? 1.3 : 1);
         if (want && !a.full && !a.loading) {
           a.loading = true;
           this.loadTexture(a.file, (map) => {
@@ -230,6 +248,7 @@ export class Streamer {
     // A tile's meshes are megabytes of vertices, sent to the graphics card when each is first drawn: all in one
     // frame, that frame stood for a tenth of a second. They are shown a few at a time instead (update()).
     group.traverse((o) => { const a = o.geometry?.attributes; if (!a || !o.visible || o.isInstancedMesh) return; let bytes = 0; for (const k in a) bytes += a[k].array.byteLength; if (bytes > 2e5) { o.visible = false; this.shown.push({ o, bytes, group }); } });
+    for (const o of group.children) if (o.isMesh) gpuOnly(o); // (the tile's own meshes: its trees and signs are the props' and the signs')
     this.scene.add(group);
     this.stats.loaded++; this.stats.buildings += info.length; this.stats.triangles += tris;
   }

@@ -7,7 +7,7 @@ import GUI from 'lil-gui';
 import { makeProjection } from './shared/geo.js';
 import { createMaterials, shared, variant, setVariant, ABSTRACT } from './world/materials.js';
 import { loadTextures } from './world/textures.js';
-import { Streamer } from './world/streamer.js';
+import { Streamer, gpuOnly } from './world/streamer.js';
 import { Props } from './world/props.js';
 import { Signs } from './world/signs.js';
 import { buildRailways } from './world/rails.js';
@@ -28,6 +28,9 @@ installSkyLight();
 
 const params = new URLSearchParams(location.search);
 const AREA = params.get('area') || 'tokyo'; // (the first of the city switch)
+// A phone or a tablet: a finger for a mouse, and a smaller graphics chip and less memory than a desktop's. It
+// starts on lighter defaults (sharpness, cloud quality: the panel can raise the clouds again).
+const HANDHELD = matchMedia('(pointer: coarse)').matches;
 
 // The loading screen (index.html): the city's name, a bar and what is being done.
 const loader = {
@@ -45,7 +48,7 @@ const USAGE = {
 
 // ---------------------------------------------------------------- renderer, scene, camera
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, HANDHELD ? 1.5 : 2)); // (a phone's screen has three pixels to the point: drawn at all of them, the frame takes too long)
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.shadowMap.enabled = true;
@@ -58,6 +61,14 @@ const scene = new THREE.Scene();
 // things stand is worked out once, in tick(), and not again at every render.
 scene.matrixWorldAutoUpdate = false;
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 1, 60000);
+// The view is 55 degrees high; on a screen held upright it would then be narrow, a slot onto a single building:
+// there it is made 55 degrees wide instead (and as high as that makes it, within reason).
+const fitView = () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.fov = camera.aspect >= 1 ? 55 : Math.min(80, THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(55 / 2)) / camera.aspect)));
+  camera.updateProjectionMatrix();
+};
+fitView();
 const controls = new MapControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.3; // (the view keeps close to the hand; how it glides on after a drag is worked out below: glide)
@@ -109,7 +120,7 @@ const proj = makeProjection(manifest.origin.lon, manifest.origin.lat);
   // an area with the land around it (mountains on the horizon): the plain becomes the sea, at sea level
   if (manifest.backdrop) {
     plain.position.y = -0.5; plain.material.color.set(0x2c4a5e); plain.material.roughness = 0.35;
-    loadBackdrop(`tiles/${AREA}`, `ortho/${AREA}/backdrop`, manifest, proj, renderer).then((mesh) => scene.add(asGround(mesh)));
+    loadBackdrop(`tiles/${AREA}`, `ortho/${AREA}/backdrop`, manifest, proj, renderer).then((mesh) => scene.add(asGround(gpuOnly(mesh))));
   }
 }
 const birds = createBirds();
@@ -146,9 +157,9 @@ atmosphere.cloudsOn = params.get('clouds') !== '0';
 let orthoLoaded = false, orthoWanted = true; // (the photo fills in when the tiles arrive; the panel may have switched it off by then)
 if (params.get('ortho') !== '0') loadOrtho(`ortho/${AREA}`, proj, manifest.bounds, renderer).then((ok) => { orthoLoaded = ok; shared.uOrthoOn.value = ok && orthoWanted ? 1 : 0; });
 const railways = await buildRailways(`tiles/${AREA}/${manifest.rails}`, (x, z) => streamer.ground(x, z), streamer.cover);
-scene.add(railways);
-scene.add(await buildFlyovers(`tiles/${AREA}/${manifest.roads}`, (x, z) => streamer.ground(x, z)));
-if (manifest.structures) scene.add(await buildStructures(`tiles/${AREA}/${manifest.structures}`, (x, z) => streamer.ground(x, z)));
+scene.add(gpuOnly(railways)); // (its trains move: they are instanced, and keep what they have)
+scene.add(gpuOnly(await buildFlyovers(`tiles/${AREA}/${manifest.roads}`, (x, z) => streamer.ground(x, z))));
+if (manifest.structures) scene.add(gpuOnly(await buildStructures(`tiles/${AREA}/${manifest.structures}`, (x, z) => streamer.ground(x, z))));
 const traffic = new Traffic(await (await fetch(`tiles/${AREA}/${manifest.roads}`)).json(), streamer.surface);
 if (params.get('cars') != null) traffic.count = Math.min(MAX_CARS, Number(params.get('cars')) || 0);
 if (params.get('traffic') !== '0') scene.add(traffic.group); else traffic.lamps.visible = false;
@@ -204,6 +215,7 @@ const previewMode = { on: params.get('preview') !== '0', live: params.get('previ
     get radius() { return this.near; }, set radius(v) { this.near = v; if (!this.wholeCity) streamer.radius = v; },
   };
   guiState = state;
+  if (HANDHELD) atmosphere.quality = 'low'; // (before the panel is made: its reset goes back to this)
   // the names of the cities, for the loading screen of the next visit (index.html reads them)
   try { for (const a of areas) localStorage.setItem(`procedural-tokyo:name:${a.id}`, a.name); } catch { /* storage unavailable */ }
   const gui = new GUI({ title: 'Settings' });
@@ -388,24 +400,51 @@ function keyboardPan(dt) {
 // Wheel zoom with inertia: each notch adds to a pending amount that is paid out over the next frames,
 // towards the point of the ground under the cursor.
 const zoom = { pending: 0, pivot: new THREE.Vector3(), ray: new THREE.Raycaster(), plane: new THREE.Plane() };
-renderer.domElement.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const notches = (e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 800 : e.deltaY) / 100;
-  zoom.pending = THREE.MathUtils.clamp(zoom.pending + notches * 0.16, -1.6, 1.6);
-  zoom.ray.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+// the point zoomed towards: the ground under (x, y) on the screen
+function zoomPivot(x, y) {
+  zoom.ray.setFromCamera(new THREE.Vector2((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1), camera);
   zoom.plane.set(THREE.Object3D.DEFAULT_UP, -controls.target.y);
   const hit = zoom.ray.ray.intersectPlane(zoom.plane, new THREE.Vector3());
   // looking at the sky, or at ground far beyond the view: zoom on the focus point instead
   zoom.pivot.copy(hit && hit.distanceTo(controls.target) < camera.position.distanceTo(controls.target) * 3 ? hit : controls.target);
+}
+// closer (step < 0) or further (step > 0) by a factor of e^step, towards the pivot
+function zoomBy(step) {
+  const dist = camera.position.distanceTo(controls.target), scale = THREE.MathUtils.clamp(Math.exp(step), controls.minDistance / dist, controls.maxDistance / dist);
+  camera.position.sub(zoom.pivot).multiplyScalar(scale).add(zoom.pivot);
+  controls.target.sub(zoom.pivot).multiplyScalar(scale).add(zoom.pivot);
+}
+renderer.domElement.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const notches = (e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 800 : e.deltaY) / 100;
+  zoom.pending = THREE.MathUtils.clamp(zoom.pending + notches * 0.16, -1.6, 1.6);
+  zoomPivot(e.clientX, e.clientY);
 }, { passive: false });
 function wheelZoom(dt) {
   if (Math.abs(zoom.pending) < 1e-4) { zoom.pending = 0; return; }
   const step = zoom.pending * (1 - Math.exp(-dt * 6));
   zoom.pending -= step;
-  const dist = camera.position.distanceTo(controls.target), scale = THREE.MathUtils.clamp(Math.exp(step), controls.minDistance / dist, controls.maxDistance / dist);
-  camera.position.sub(zoom.pivot).multiplyScalar(scale).add(zoom.pivot);
-  controls.target.sub(zoom.pivot).multiplyScalar(scale).add(zoom.pivot);
+  zoomBy(step);
 }
+// Two fingers on a touch screen: pinched together or apart, the view zooms as the wheel does, towards the ground
+// between them; moved together, they turn it (that is the controls' own: zoom is left to this, as for the wheel).
+const fingers = new Map(); // pointerId -> [x, y]
+const span = () => { const [a, b] = fingers.values(); return Math.hypot(a[0] - b[0], a[1] - b[1]); };
+renderer.domElement.addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') fingers.set(e.pointerId, [e.clientX, e.clientY]); });
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!fingers.has(e.pointerId)) return;
+  const before = fingers.size === 2 ? span() : 0;
+  fingers.set(e.pointerId, [e.clientX, e.clientY]);
+  if (fingers.size !== 2 || !before) return;
+  const [a, b] = fingers.values();
+  zoom.pending = 0;
+  zoomPivot((a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+  zoomBy(Math.log(before / Math.max(1, span())));
+  glide.pinched = true; // (the fingers' zoom moved the focus point: that is not a flick to glide on from)
+});
+const lift = (e) => fingers.delete(e.pointerId);
+addEventListener('pointerup', lift);
+addEventListener('pointercancel', lift);
 
 // Gliding on after a drag: as fast as the view was moving when it was let go. A quick flick sends it far, a slow
 // drag leaves it where it was put (and so does a drag that stopped before the button was released).
@@ -420,6 +459,7 @@ renderer.domElement.addEventListener('wheel', glideStop, { passive: true });
 const glideRelease = () => {
   if (!glide.dragging) return;
   glide.dragging = false;
+  if (glide.pinched) { glide.pinched = false; return; }
   // how fast it went, by the measure of the view: its own width per second for a pan, radians per second for a turn
   const dist = camera.position.distanceTo(controls.target);
   const flick = Math.max(THREE.MathUtils.smoothstep(glide.pan.length() / dist, 0.2, 1.2), THREE.MathUtils.smoothstep(glide.turn.length(), 0.4, 2));
@@ -469,11 +509,20 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   picked = hit ? streamer.buildingAt(hit) : null;
 });
 
+// The tiles' full-size photos (2048 pixels square, four times the small ones') are fetched within some hundreds of
+// metres of the eye. On a phone's screen that detail is mostly too fine to show: the graphics card draws it from the
+// smaller copies it makes of the photo, much as it would draw the small photo. So a phone or a tablet asks for them
+// only as near as its screen can show them, by its pixels over the view's height against a desktop's (1800 pixels over
+// 55 degrees) — and keeps that many megabytes off the network and out of the graphics memory it shares.
+const fitPhotos = () => {
+  if (HANDHELD) streamer.photoReach = Math.min(1, (renderer.domElement.height / THREE.MathUtils.degToRad(camera.fov)) / (1800 / THREE.MathUtils.degToRad(55)));
+};
+fitPhotos();
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
+  fitView();
   renderer.setSize(innerWidth, innerHeight);
   atmosphere.setSize(innerWidth, innerHeight);
+  fitPhotos();
 });
 
 // ---------------------------------------------------------------- loop
@@ -541,7 +590,8 @@ function tick() {
     `tiles ${s.loaded}/${manifest.tiles.length}${streamer.pending ? ` (+${streamer.pending})` : ''} · ${s.buildings} buildings\n` +
     (picked ? `\n▸ ${USAGE[picked.usage] ?? 'usage ' + picked.usage}, ${picked.height.toFixed(1)} m` +
       `${picked.storeys ? `, ${picked.storeys} floors` : ''}, base ${picked.base.toFixed(1)} m\n` : '') +
-    `\ndrag pan · right-drag rotate · wheel zoom\nWASD move (shift fast) · N day/night · click building`;
+    (HANDHELD ? `\ndrag pan · two fingers: pinch zoom, drag rotate\ntap building`
+      : `\ndrag pan · right-drag rotate · wheel zoom\nWASD move (shift fast) · N day/night · click building`);
 }
 // The switch in the corner shows this very view as the other mode draws it: as it moves (the panel's live preview:
 // every few frames), or else each time the view has come to rest. For that the

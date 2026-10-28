@@ -63,8 +63,10 @@ photo textures, smaller towns plain blocks.
 ## Controls
 
 Drag to pan, right-drag to rotate, wheel to zoom, WASD to move (shift: fast), N to flip day and night, click a
+building to inspect it. On a touch screen: drag to pan, pinch to zoom, drag with two fingers to rotate, tap a
 building to inspect it. The Settings panel (top right) switches city and controls time, traffic, clouds,
-lighting and rendering quality; settings are remembered in the browser.
+lighting and rendering quality; settings are remembered in the browser. Phones and tablets start on lighter
+defaults: fewer pixels, and low cloud quality (which the panel can raise).
 
 URL parameters: `?area=tokyo|shiba|shibuya|shinjuku|chiyoda|chuo|fujinomiya`, `?time=18.5` (Tokyo hour), `?night=1`,
 `?cam=x,z,distance,azimuth,elevation`, `?radius=900`, `?traffic=0`, `?cars=600`, `?birds=150`, `?clouds=0.25`,
