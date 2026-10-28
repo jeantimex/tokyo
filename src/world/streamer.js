@@ -49,6 +49,9 @@ export class Streamer {
     this.base = base;
     this.radius = radius;
     this.hysteresis = hysteresis;
+    // How far out the full-size photos are used, as a share of ROOFS_FULL and WALLS_FULL: on a screen of fewer pixels
+    // the small photo is as sharp as the screen out to a shorter distance (see main.js).
+    this.photoReach = 1;
     this.tiles = new Map(); // key -> { state, group, info, ends, tris }
     this.inFlight = 0;
     this.stats = { loaded: 0, buildings: 0, triangles: 0 };
@@ -103,7 +106,7 @@ export class Streamer {
         t.trees.near.visible = near; t.trees.far.visible = !near;
       }
       for (const a of t.atlases) {
-        const want = d < a.dist * (a.full || a.loading ? 1.3 : 1);
+        const want = d < a.dist * this.photoReach * (a.full || a.loading ? 1.3 : 1);
         if (want && !a.full && !a.loading) {
           a.loading = true;
           this.loadTexture(a.file, (map) => {

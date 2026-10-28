@@ -509,10 +509,20 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   picked = hit ? streamer.buildingAt(hit) : null;
 });
 
+// The tiles' full-size photos (2048 pixels square, four times the small ones') are fetched within some hundreds of
+// metres of the eye. On a phone's screen that detail is mostly too fine to show: the graphics card draws it from the
+// smaller copies it makes of the photo, much as it would draw the small photo. So a phone or a tablet asks for them
+// only as near as its screen can show them, by its pixels over the view's height against a desktop's (1800 pixels over
+// 55 degrees) — and keeps that many megabytes off the network and out of the graphics memory it shares.
+const fitPhotos = () => {
+  if (HANDHELD) streamer.photoReach = Math.min(1, (renderer.domElement.height / THREE.MathUtils.degToRad(camera.fov)) / (1800 / THREE.MathUtils.degToRad(55)));
+};
+fitPhotos();
 addEventListener('resize', () => {
   fitView();
   renderer.setSize(innerWidth, innerHeight);
   atmosphere.setSize(innerWidth, innerHeight);
+  fitPhotos();
 });
 
 // ---------------------------------------------------------------- loop
