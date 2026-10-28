@@ -7,7 +7,7 @@ import GUI from 'lil-gui';
 import { makeProjection } from './shared/geo.js';
 import { createMaterials, shared, variant, setVariant, ABSTRACT } from './world/materials.js';
 import { loadTextures } from './world/textures.js';
-import { Streamer } from './world/streamer.js';
+import { Streamer, gpuOnly } from './world/streamer.js';
 import { Props } from './world/props.js';
 import { Signs } from './world/signs.js';
 import { buildRailways } from './world/rails.js';
@@ -120,7 +120,7 @@ const proj = makeProjection(manifest.origin.lon, manifest.origin.lat);
   // an area with the land around it (mountains on the horizon): the plain becomes the sea, at sea level
   if (manifest.backdrop) {
     plain.position.y = -0.5; plain.material.color.set(0x2c4a5e); plain.material.roughness = 0.35;
-    loadBackdrop(`tiles/${AREA}`, `ortho/${AREA}/backdrop`, manifest, proj, renderer).then((mesh) => scene.add(asGround(mesh)));
+    loadBackdrop(`tiles/${AREA}`, `ortho/${AREA}/backdrop`, manifest, proj, renderer).then((mesh) => scene.add(asGround(gpuOnly(mesh))));
   }
 }
 const birds = createBirds();
@@ -157,9 +157,9 @@ atmosphere.cloudsOn = params.get('clouds') !== '0';
 let orthoLoaded = false, orthoWanted = true; // (the photo fills in when the tiles arrive; the panel may have switched it off by then)
 if (params.get('ortho') !== '0') loadOrtho(`ortho/${AREA}`, proj, manifest.bounds, renderer).then((ok) => { orthoLoaded = ok; shared.uOrthoOn.value = ok && orthoWanted ? 1 : 0; });
 const railways = await buildRailways(`tiles/${AREA}/${manifest.rails}`, (x, z) => streamer.ground(x, z), streamer.cover);
-scene.add(railways);
-scene.add(await buildFlyovers(`tiles/${AREA}/${manifest.roads}`, (x, z) => streamer.ground(x, z)));
-if (manifest.structures) scene.add(await buildStructures(`tiles/${AREA}/${manifest.structures}`, (x, z) => streamer.ground(x, z)));
+scene.add(gpuOnly(railways)); // (its trains move: they are instanced, and keep what they have)
+scene.add(gpuOnly(await buildFlyovers(`tiles/${AREA}/${manifest.roads}`, (x, z) => streamer.ground(x, z))));
+if (manifest.structures) scene.add(gpuOnly(await buildStructures(`tiles/${AREA}/${manifest.structures}`, (x, z) => streamer.ground(x, z))));
 const traffic = new Traffic(await (await fetch(`tiles/${AREA}/${manifest.roads}`)).json(), streamer.surface);
 if (params.get('cars') != null) traffic.count = Math.min(MAX_CARS, Number(params.get('cars')) || 0);
 if (params.get('traffic') !== '0') scene.add(traffic.group); else traffic.lamps.visible = false;
